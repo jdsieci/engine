@@ -24,7 +24,6 @@ define('port',default=8888,type=int)
 define('address',default='')
 define('workers',default=os.sysconf("SC_NPROCESSORS_ONLN"),type=int,help='Quantity of worker processes, running more than %i is not recommended' % (os.sysconf("SC_NPROCESSORS_ONLN")*2))
 
-#TODO: Wlasciwa hierarchia klas
 class SimpleApplication(tornado.web.Application):
   def __init__(self,handlers, **settings):
     self.name=self.__class__.__name__.lower()
@@ -45,6 +44,9 @@ class BaseApplication(SimpleApplication):
   
 
 class DatabaseApplication(SimpleApplication):
+  """Application with database engine handling
+  Not Fully Implemented Yet!
+  """
   def __init__(self,handlers,**settings):
     define('poolsize',default=10,type=int)
     settings['session_secret'] = options.sessionsecret
