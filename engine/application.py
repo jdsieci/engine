@@ -10,7 +10,6 @@ class Application(engine.application.BaseApplication):
     settings={}
     super(Application,self).__init__(handlers,**settings)
 '''
-
 import tornado.web
 from tornado.options import define,options
 from sqlalchemy.orm import scoped_session, sessionmaker

@@ -10,9 +10,7 @@ import logging
 import signal
 import grp
 import pwd
-#from daemon import pidlockfile
 import daemon
-#import lockfile
 import tornado.options
 from tornado.options import define, options
 import setproctitle
