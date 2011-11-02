@@ -4,6 +4,9 @@ import logging
 import ssl
 
 #Setting up default options
+
+__all__ = ['application', 'runner', 'server', 'session']
+
 __default_options = (
                      dict(name='config',default='./engine.conf',metavar='./engine.conf',help='Path to configuration file'),
                      dict(name='cacerts',default=None,help='Path to CA SSL certificates, concateneted to one file'),
