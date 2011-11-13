@@ -1,3 +1,16 @@
+# Copyright 2011 JDSieci
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
 '''
 Created on 22-07-2011
 
@@ -25,11 +38,8 @@ define('workdir',default='.',help='')
 define('pidfile',default=None,help='')
 define('user',default=None,help='')
 define('group',default=None,help='')
+define('logfile',default=None,help='Path to logfile default stdout')
 
-
-#sys.argv[0] = 'ceda'
-
-#loadconfig()
 
 #TODO: zrobic zapis do logu z wykorzystaniem tornado.options.enable_pretty_logging()
 #context = daemon.DaemonContext(working_directory=options.workdir,
@@ -111,8 +121,8 @@ class Runner(object):
                                    detach_process=not options.foreground,
                                    uid=options.user and pwd.getpwnam(options.user).pw_uid or None,
                                    gid=options.group and grp.getgrnam(options.group).gr_gid or None,
-                                   stdout=sys.stdout,
-                                   stderr=sys.stderr
+                                   stdout=options.stdout,
+                                   stderr=options.stderr
                                   )
     context.signal_map = {signal.SIGTERM: self._stop,
                       signal.SIGINT: self._stop,
@@ -141,13 +151,18 @@ class Runner(object):
     try:
       tornado.options.parse_config_file(options.config)
     except IOError, e:
-      print e.strerror + ': ' + options.config
-      print 'Using defaults'
+      logging.debug(e.strerror + ': ' + options.config)
+      logging.debug('Using defaults')
     tornado.options.parse_command_line()
     tornado.options.enable_pretty_logging()
     if options.debug:
       print 'Debug Enabled'
       options.foreground=True
+      options.stderr=sys.stderr
+      options.out=sys.stdout
+    else:
+      options.err=open(options.logfile,'a',False)
+      options.out=open(options.logfile,'a',False)      
       
   def start(self):
     try:
