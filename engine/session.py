@@ -60,13 +60,23 @@ class _Session(dict):
 
 
 class BaseSessionStorage(object):
+  """Dummy sessionstorage. All session storages have to inherit from that class"""
   def __init__(self, secret):
     self.secret = secret
 
   def get(self, session_id = None, hmac_digest = None):
+    """Gets session from strage. Needs to be implemented in child class.
+    Keyword arguments:
+    session_id -- session identyfier
+    hmac_digest -- hmac authetication string
+    It must retrun _Session object
+    """
     pass
   
   def set(self, session):
+    """ Puts session to storage. Needs to be implemented in child class.
+    It must retrun _Session object
+    """
     pass
 
   def _get_hmac_digest(self, session_id):

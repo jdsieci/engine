@@ -38,6 +38,7 @@ define('address',default='')
 define('workers',default=os.sysconf("SC_NPROCESSORS_ONLN"),type=int,help='Quantity of worker processes, running more than %i is not recommended' % (os.sysconf("SC_NPROCESSORS_ONLN")*2))
 
 class SimpleApplication(tornado.web.Application):
+  """Equivalent to tornado.web.Application, for clean inheritance"""
   def __init__(self,handlers, **settings):
     self.name=self.__class__.__name__.lower()
     super(SimpleApplication,self).__init__(handlers, **settings)

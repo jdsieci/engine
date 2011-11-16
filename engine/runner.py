@@ -41,15 +41,6 @@ define('group',default=None,help='')
 define('logfile',default=None,help='Path to logfile default stdout')
 
 
-#TODO: zrobic zapis do logu z wykorzystaniem tornado.options.enable_pretty_logging()
-#context = daemon.DaemonContext(working_directory=options.workdir,
-#                               pidfile=options.pidfile and options.pidfile or None,
-#                               detach_process=not options.foreground,
-#                               uid=options.user and pwd.getpwnam(options.user).pw_uid or None,
-#                               gid=options.group and grp.getgrnam(options.group).gr_gid or None,
-#                               stdout=sys.stdout,
-#                               stderr=sys.stderr
-#                              )
 #TODO: obsluga sygnalow, przeladowanie konfiguracji !!!
 #context.signal_map = {signal.SIGTERM: stopworkers,
 #                      signal.SIGINT: stopworkers,
@@ -61,6 +52,7 @@ define('logfile',default=None,help='Path to logfile default stdout')
 #  runworkers()
 
 class Worker(multiprocessing.Process):
+  """Worker class"""
   _application = None
   ssl_options = None
   _context = daemon.DaemonContext()
@@ -80,6 +72,7 @@ class Worker(multiprocessing.Process):
     super(Worker,self).__init__(**kwargs)
     
   def run(self):
+    """Starts Tornado compatible worker"""
     setproctitle.setproctitle(self.name)
     server = self.server(self._application,
                          self.ssl_options)
@@ -110,6 +103,7 @@ class Worker(multiprocessing.Process):
 
 
 class Runner(object):
+  """Runner class"""
   _workers=[]
   _starting=True
   _closing=False
@@ -133,6 +127,7 @@ class Runner(object):
     setproctitle.setproctitle(application.name)
     
   def createworkers(self):
+    """Creates Worker class subprocesses"""
     for w in range(options.workers):
       port = options.port + w
       worker = self.worker(self.application,
@@ -147,6 +142,7 @@ class Runner(object):
       worker.listen(port,options.address)
       self._workers.append(worker)
   def loadconfig(self):
+    """Loads config from commandline and config file"""
     tornado.options.parse_command_line()
     try:
       tornado.options.parse_config_file(options.config)
@@ -165,6 +161,7 @@ class Runner(object):
       options.out=open(options.logfile,'a',False)      
       
   def start(self):
+    """Starts main proccess and workers"""
     try:
       self._context.open()
     except:
@@ -178,6 +175,10 @@ class Runner(object):
     self._loop()
   
   def execute(self):
+    """Equivalent to
+    Runner.loadconfig()
+    Runner.start()
+    """
     self.loadconfig()
     #self.createworkers()
     self.start()
