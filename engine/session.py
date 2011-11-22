@@ -71,13 +71,13 @@ class BaseSessionStorage(object):
     hmac_digest -- hmac authetication string
     It must retrun _Session object
     """
-    pass
+    raise InvalidSessionException('Need to be implemented')
   
   def set(self, session):
     """ Puts session to storage. Needs to be implemented in child class.
     It must retrun _Session object
     """
-    pass
+    raise InvalidSessionException('Need to be implemented')
 
   def _get_hmac_digest(self, session_id):
     return hmac.new(session_id, self.secret, hashlib.sha1).hexdigest()
