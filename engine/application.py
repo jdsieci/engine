@@ -25,8 +25,6 @@ class Application(engine.application.BaseApplication):
 '''
 import tornado.web
 from tornado.options import define,options
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy import create_engine
 import session
 import os
 #build-in options
