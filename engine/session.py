@@ -154,6 +154,12 @@ try:
     def __init__(self,db,**kwargs):
       super(AlchemySessionStorage,self).__init__(**kwargs)
       self.db=db
+    
+    def get(self,session_id=None,hmac_digest=None):
+      pass
+    
+    def set(self,session):
+      pass
 
 except ImportError:
   pass

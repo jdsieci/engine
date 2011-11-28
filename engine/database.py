@@ -19,8 +19,15 @@ Database pool classes
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy import create_engine
 
-from overloading import overload
-
-class DBPool(object):
-  def __init__(self,):
+class Pool(object):
+  _count = 0
+  def __init__(self):
     pass
+  
+  def get(self):
+    self._count += 1 
+    pass
+  
+  def put(self):
+    self._count -= 1 
+    return self._count

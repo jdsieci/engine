@@ -16,6 +16,7 @@
 
 
 import os
+import sys
 try:
   from setuptools import setup
 except ImportError:
@@ -25,6 +26,11 @@ kwargs = {}
 
 def read(fname):
   return open(os.path.join(os.path.dirname(__file__), fname)).read()
+
+major, minor = sys.version_info[:2]
+if major >= 3:
+  kwargs["use_2to3"] = True
+
 
 setup(name="engine",
       version = "0.1.0",
