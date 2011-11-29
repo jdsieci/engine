@@ -146,24 +146,18 @@ class DirectorySessionStorage(BaseSessionStorage):
     pickle.dump(dict(session.items()), session_file)
     session_file.close()
 
-#TODO: wywalenie sqlalchemy i uzycie wewnetrznego sterownika
-try:
-  import sqlalchemy
-      
-  class AlchemySessionStorage(BaseSessionStorage):
-    """SessionStorage using database via SQLAlchemy as session store"""
-    def __init__(self,db,**kwargs):
-      super(AlchemySessionStorage,self).__init__(**kwargs)
-      self.db=db
-    
-    def get(self,session_id=None,hmac_digest=None):
-      pass
-    
-    def set(self,session):
-      pass
+import database      
+class DatabaseSessionStorage(BaseSessionStorage):
+  """SessionStorage using database via SQLAlchemy as session store"""
+  def __init__(self,db,**kwargs):
+    super(DatabaseSessionStorage,self).__init__(**kwargs)
+    self.db=db
 
-except ImportError:
-  pass
+  def get(self,session_id=None,hmac_digest=None):
+    pass
+  
+  def set(self,session):
+    pass
              
 class SessionManager(object):
   """ A SessionManager is specifically for use in Tornado, using Tornado's cookies """
