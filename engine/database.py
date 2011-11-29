@@ -15,10 +15,13 @@
 Database pool classes
 '''
 
+#TODO: wsteczna zgodnosci z tornado.database
+#TODO: wykozystanie db-api
+#TODO: wywalenie sqlalchemy
 
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy import create_engine
-
+#TODO: dzialajaca pula polaczen, jedna dla roznych silnikow per aplikacja
 class Pool(object):
   _count = 0
   def __init__(self):

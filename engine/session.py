@@ -146,6 +146,7 @@ class DirectorySessionStorage(BaseSessionStorage):
     pickle.dump(dict(session.items()), session_file)
     session_file.close()
 
+#TODO: wywalenie sqlalchemy i uzycie wewnetrznego sterownika
 try:
   import sqlalchemy
       
