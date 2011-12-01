@@ -20,15 +20,51 @@ Database pool classes
 #TODO: wywalenie sqlalchemy
 
 #TODO: dzialajaca pula polaczen, jedna dla roznych silnikow per aplikacja
+class Connection(object):
+  def __init__(self,driver,*args,**kwargs):
+    self._allowed_drivers()
+    if driver.lower() in self._allowed.keys():
+      self._db = self._allowed[driver].connect(*args,**kwargs)
+    
+  def _allowed_drivers(self):
+    self._allowed={}
+    try:
+      import psycopg2
+      self._allowed['pgsql']=psycopg2
+    except ImportError:
+      pass
+    try:
+      import MySQLdb
+      self._allowed['mysql']=MySQLdb
+    except ImportError:
+      pass    
+    try:
+      import sqlite3
+      self._allowed['sqlite']=sqlite3
+    except ImportError:
+      pass    
+
+  def __getattr__(self,attr):
+    return getattr(self._db, attr)
+  def __repr__(self):
+    return repr(self._db) 
+  def close(self):
+    pass
+  
+   
 class Pool(object):
-  _count = 0
-  def __init__(self):
+  _connections=dict()
+  def __init__(self,minconn, maxconn, *args, **kwargs):
     pass
   
-  def get(self):
-    self._count += 1 
-    pass
+  def getconn(self,key=None):
+    if self._connections.has_key(key):
+      return self._connections[key]
+    else:
+      self._connections[key]
   
-  def put(self):
-    self._count -= 1 
+  def putconn(self,connection=None,key=None,close=False):
     return self._count
+  
+  def closeall(self):
+    pass
