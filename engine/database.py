@@ -12,7 +12,9 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 '''
-Database pool classes
+DB-API 2.0 Compilant database wrapper, for Mysql (MySQLdb), 
+PostgreSQL (psycopg2) and SQLite (sqlite3).
+Implemented single connection Pool for application process.
 '''
 
 #TODO: wsteczna zgodnosci z tornado.database
@@ -20,37 +22,79 @@ Database pool classes
 #TODO: wywalenie sqlalchemy
 
 #TODO: dzialajaca pula polaczen, jedna dla roznych silnikow per aplikacja
+
+
+import re
+
+_allowed_drivers={}
+_basecursors={}
+try:
+  import psycopg2
+  _allowed_drivers['pgsql']=psycopg2
+  import psycopg2.extensions
+  _basecursors['pgsql']=psycopg2.extensions.cursor
+except ImportError:
+  pass
+try:
+  import MySQLdb
+  _allowed_drivers['mysql']=MySQLdb
+  import MySQLdb.cursors
+  _basecursors['mysql']=MySQLdb.cursors.Cursor
+except ImportError:
+  pass    
+try:
+  import sqlite3
+  _allowed_drivers['sqlite']=sqlite3
+  _basecursors['sqlite']=sqlite3.Cursor
+except ImportError:
+  pass    
+
+
 class Connection(object):
   def __init__(self,driver,*args,**kwargs):
-    self._allowed_drivers()
-    if driver.lower() in self._allowed.keys():
-      self._db = self._allowed[driver].connect(*args,**kwargs)
-    
-  def _allowed_drivers(self):
-    self._allowed={}
-    try:
-      import psycopg2
-      self._allowed['pgsql']=psycopg2
-    except ImportError:
-      pass
-    try:
-      import MySQLdb
-      self._allowed['mysql']=MySQLdb
-    except ImportError:
-      pass    
-    try:
-      import sqlite3
-      self._allowed['sqlite']=sqlite3
-    except ImportError:
-      pass    
-
+    global _allowed_drivers
+    global _basecursors
+    if driver.lower() in _allowed_drivers.keys():
+      self._db = _allowed_drivers[driver].connect(*args,**kwargs)
+      self.driver=driver.lower()
+      self._basecursor=_basecursors[driver]
+      
   def __getattr__(self,attr):
     return getattr(self._db, attr)
+  
   def __repr__(self):
     return repr(self._db) 
+  
+  def _cursor_factory(self):
+    basecursor=self._basecursor
+    if self.driver == 'sqlite':
+      requery=re.compile('%\((\w+)?\)s')
+      class Cursor(basecursor):
+        def execute(self,query,parameters=None):
+          return super(basecursor,self).execute(self._translate(query,parameters),parameters)
+
+        def _translate(self,query,params):
+          if type(params) is dict:
+            return requery.sub(r':\1',query)
+          else:
+            return query.replace('%s','?')
+        
+    if self.driver == 'sqlite':
+      class Cursor(basecursor):
+        def execute(self,query,parameters=None):
+          return super(basecursor,self).execute(self._translate(query,parameters),parameters)
+        def _translate(self,query):
+          return query
+    return Cursor    
+  
+  def cursor(self):
+    if self.driver == 'pgsql':
+      return self._db.cursor(cursor_factory=self._cursor_factory())
+    return self._db.cursor(self._cursor_factory())
+
   def close(self):
     pass
-  
+
    
 class Pool(object):
   _connections=dict()
