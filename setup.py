@@ -38,10 +38,10 @@ setup(name="engine",
       author_email = "biuro@jdsieci.pl",
       description = "Based on Tornado ",
       long_description = read('README'),
-      license = "http://www.apache.org/licenses/LICENSE-2.0",      
+      license = "http://www.apache.org/licenses/LICENSE-2.0",
       package_dir = {'engine':'engine'},
       packages = ['engine'],
-      requires = ['tornado (>=2.1.1)','elixir (>=0.7.1)','daemon','setproctitle'],
-      install_requires = ['tornado>=2.1.1','elixir>=0.7.1','daemon','setproctitle'],
+      requires = ['tornado (>=2.1.1)','daemon','setproctitle'],
+      install_requires = ['tornado>=2.1.1','daemon','setproctitle'],
       **kwargs
      )

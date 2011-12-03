@@ -12,7 +12,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 '''
-DB-API 2.0 Compilant database wrapper, for Mysql (MySQLdb), 
+DB-API 2.0 Compilant database wrapper, for MySQL (MySQLdb),
 PostgreSQL (psycopg2) and SQLite (sqlite3).
 Implemented single connection Pool for application process.
 '''
@@ -41,30 +41,36 @@ try:
   import MySQLdb.cursors
   _basecursors['mysql']=MySQLdb.cursors.Cursor
 except ImportError:
-  pass    
+  pass
 try:
   import sqlite3
   _allowed_drivers['sqlite']=sqlite3
   _basecursors['sqlite']=sqlite3.Cursor
 except ImportError:
-  pass    
+  pass
 
 
 class Connection(object):
-  def __init__(self,driver,*args,**kwargs):
+  pool=None
+  dsn=None
+  def __init__(self,driver,pool=None,*args,**kwargs):
     global _allowed_drivers
     global _basecursors
+    self.pool = None
     if driver.lower() in _allowed_drivers.keys():
       self._db = _allowed_drivers[driver].connect(*args,**kwargs)
       self.driver=driver.lower()
       self._basecursor=_basecursors[driver]
-      
+
+  def __del__(self):
+    self.close()
+
   def __getattr__(self,attr):
     return getattr(self._db, attr)
-  
+
   def __repr__(self):
-    return repr(self._db) 
-  
+    return repr(self._db)
+
   def _cursor_factory(self):
     basecursor=self._basecursor
     if self.driver == 'sqlite':
@@ -78,37 +84,43 @@ class Connection(object):
             return requery.sub(r':\1',query)
           else:
             return query.replace('%s','?')
-        
+
     if self.driver == 'sqlite':
       class Cursor(basecursor):
         def execute(self,query,parameters=None):
           return super(basecursor,self).execute(self._translate(query,parameters),parameters)
         def _translate(self,query):
           return query
-    return Cursor    
-  
+    return Cursor
+
   def cursor(self):
     if self.driver == 'pgsql':
       return self._db.cursor(cursor_factory=self._cursor_factory())
     return self._db.cursor(self._cursor_factory())
 
-  def close(self):
-    pass
+  def close(self,):
+    if self.pool is not None:
+      self.pool.delcon()
+    if getattr(self, "_db", None) is not None:
+      self._db.close()
+      self._db = None
 
-   
 class Pool(object):
   _connections=dict()
-  def __init__(self,minconn, maxconn, *args, **kwargs):
-    pass
-  
+  def __init__(self,maxconn,**kwargs):
+    self.maxconn = maxconn
+    self.per_drivermaxconn = {}
+    
   def getconn(self,key=None):
-    if self._connections.has_key(key):
-      return self._connections[key]
-    else:
-      self._connections[key]
-  
+    """key = default None, should be DSN"""
+    if key not in self._connections.keys():
+      self._connections[key] = Connection()
+    return self._connections[key]
+
   def putconn(self,connection=None,key=None,close=False):
-    return self._count
-  
-  def closeall(self):
     pass
+  def delcon(self,key=None,connection=None):
+    pass
+  def closeall(self):
+    for con in self._connections.itervalues():
+      con.close()
