@@ -39,6 +39,8 @@ try:
   import MySQLdb
   _allowed_drivers['mysql']=MySQLdb
   import MySQLdb.cursors
+  import MySQLdb.constants
+  import MySQLdb.converters
   _basecursors['mysql']=MySQLdb.cursors.Cursor
 except ImportError:
   pass
@@ -53,12 +55,15 @@ except ImportError:
 class Connection(object):
   pool=None
   dsn=None
-  def __init__(self,driver,pool=None,*args,**kwargs):
+  def __init__(self,pool=None,driver,**kwargs):
     global _allowed_drivers
     global _basecursors
-    self.pool = None
+    self.pool = pool
+    self.host = host
+    self.database = database
+    self.max_idle_time = max_idle_time
     if driver.lower() in _allowed_drivers.keys():
-      self._db = _allowed_drivers[driver].connect(*args,**kwargs)
+      self._db = _allowed_drivers[driver].connect(**kwargs)
       self.driver=driver.lower()
       self._basecursor=_basecursors[driver]
 
@@ -70,6 +75,46 @@ class Connection(object):
 
   def __repr__(self):
     return repr(self._db)
+
+  def _connect_mysql(self):
+    self.host = host
+    self.database = database
+    self.max_idle_time = max_idle_time
+
+    args = dict(use_unicode=True, charset="utf8",
+                db=self.database, init_command='SET time_zone = "+0:00"',
+                sql_mode="TRADITIONAL")
+    if user is not None:
+      args["user"] = user
+    if password is not None:
+      args["passwd"] = password
+
+    # We accept a path to a MySQL socket file or a host(:port) string
+    if "/" in host:
+      args["unix_socket"] = host
+    else:
+      self.socket = None
+      pair = host.split(":")
+      if len(pair) == 2:
+        args["host"] = pair[0]
+        args["port"] = int(pair[1])
+      else:
+        args["host"] = host
+        args["port"] = 3306
+    self._db = None
+    self._db_args = args
+    self._last_use_time = time.time()
+    try:
+      self.reconnect()
+    except Exception:
+      logging.error("Cannot connect to MySQL on %s", self.host,
+                    exc_info=True)
+  
+  def _connect_pgsql(self):
+    pass
+  
+  def _connect_sqlite(self):
+    pass
 
   def _cursor_factory(self):
     basecursor=self._basecursor
@@ -104,20 +149,41 @@ class Connection(object):
     if getattr(self, "_db", None) is not None:
       self._db.close()
       self._db = None
+  
+  def reconnect(self):
+    """Closes the existing database connection and re-opens it."""
+    connect=getattr(self,'_connect'+self.driver)
+    self.close()
+    connect()
+    self._db.autocommit(False)
+
 
 class Pool(object):
+  """Class managing all database connections, should be one per application process"""
   _connections=dict()
+  
   def __init__(self,maxconn,**kwargs):
+    global _allowed_drivers
     self.maxconn = maxconn
-    self.per_drivermaxconn = {}
+    self._weights=dict.fromkeys(_allowed_drivers.keys(),1)
+    self._loads=dict.fromkeys(_allowed_drivers.keys(),0)
     
-  def getconn(self,key=None):
-    """key = default None, should be DSN"""
-    if key not in self._connections.keys():
-      self._connections[key] = Connection()
-    return self._connections[key]
+  def _calculate_weight(self,driver=None):
+    if driver == None:
+    else:
+      
+  
+  def _connect(self):
+    pass
+      
+  def getconn(self,driver,):
+    """dsn = default None, should be DSN"""
+    if dsn not in self._connections.keys():
+      self._connections[dsn] = Connection(pool=self,driver=)
+    self._loads
+    return self._connections[dsn]
 
-  def putconn(self,connection=None,key=None,close=False):
+  def putconn(self,connection=None,dsn=None,close=False):
     pass
   def delcon(self,key=None,connection=None):
     pass
