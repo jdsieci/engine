@@ -15,57 +15,108 @@
 DB-API 2.0 Compilant database wrapper, for MySQL (MySQLdb),
 PostgreSQL (psycopg2) and SQLite (sqlite3).
 Implemented single connection Pool for application process.
+
+DSN formats:
+  driver://[user[:password]@]hostname[:port]/dbname
+  driver://[user[:password]@]unix_socket:dbname
+  driver://absolute_path_to_database
+Exceptions:
+  sqlite://:memory:
+  
+Query parameter markers:
+  All connections use 'format' and 'pyformat'  
 '''
 
 #TODO: wsteczna zgodnosci z tornado.database
-#TODO: wykozystanie db-api
-#TODO: wywalenie sqlalchemy
+#TODO: wykozystanie db-api 2.0
 
 #TODO: dzialajaca pula polaczen, jedna dla roznych silnikow per aplikacja
 
 
 import re
+import logging
+import time
 
-_allowed_drivers={}
-_basecursors={}
+_ALLOWED_DRIVERS={}
+_BASECURSORS={}
 try:
   import psycopg2
-  _allowed_drivers['pgsql']=psycopg2
+  _ALLOWED_DRIVERS['pgsql']=psycopg2
   import psycopg2.extensions
-  _basecursors['pgsql']=psycopg2.extensions.cursor
+  _BASECURSORS['pgsql']=psycopg2.extensions.cursor
 except ImportError:
   pass
 try:
   import MySQLdb
-  _allowed_drivers['mysql']=MySQLdb
+  _ALLOWED_DRIVERS['mysql']=MySQLdb
   import MySQLdb.cursors
   import MySQLdb.constants
   import MySQLdb.converters
-  _basecursors['mysql']=MySQLdb.cursors.Cursor
+  _BASECURSORS['mysql']=MySQLdb.cursors.Cursor
 except ImportError:
   pass
 try:
   import sqlite3
-  _allowed_drivers['sqlite']=sqlite3
-  _basecursors['sqlite']=sqlite3.Cursor
+  _ALLOWED_DRIVERS['sqlite']=sqlite3
+  _BASECURSORS['sqlite']=sqlite3.Cursor
 except ImportError:
   pass
+#try:
+#  import pyodbc
+#  _ALLOWED_DRIVERS['odbc']=pyodbc
+#  _BASECURSORS['odbc']=pyodbc.Cursor
+#except ImportError:
+#  pass
 
+#Internal CONSTANTS
+_DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
+                     (?P<driver>\w+?)://  # driver
+                     (?:(?:(?P<user>\w+?)(?::(?P<password>\w+?))?@)?  # user and password pattern
+                     (?:(?P<host>[\w\.]+?)(?::(?P<port>\d+))?/|(?P<unix_socket>/\w+(?:/?\w+)*):)  # host patterns
+                     (?P<dbname>\w+)|(?P<path>/\w+(?:/?\w+)*)) # database patterns''', re.I | re.L | re.X)
 
 class Connection(object):
+  
   pool=None
-  dsn=None
-  def __init__(self,pool=None,driver,**kwargs):
-    global _allowed_drivers
-    global _basecursors
-    self.pool = pool
-    self.host = host
-    self.database = database
-    self.max_idle_time = max_idle_time
-    if driver.lower() in _allowed_drivers.keys():
-      self._db = _allowed_drivers[driver].connect(**kwargs)
+  _dsn=None
+  
+  def __init__(self,dsn,pool=None,**kwargs):
+    try:
+      (exception,driver,user,password,host,port,unix_socket,dbname,path) = _DSNRE.match(dsn).groups()
+    except AttributeError:
+      raise
+    
+    self._dsn = dsn
+    if not exception:
+      self.pool = pool
+      self.host = host
+      self.port = port
+      self.unix_socket = unix_socket
+      self.path = path
+      self.database = dbname
+      self.password = password
+      self.user = user
+    elif exception == 'sqlite':
+      self.driver = exception
+      self.path = ':memory:'
+    
+    #Optional params
+    try: self.max_idle_time = kwargs['max_idle_time']
+    except KeyError: self.max_idle_time = 7*3600
+    try: self.autocommit = kwargs['autocommit']
+    except KeyError:  self.autocommit = False
+    
+    try: connect = kwargs['connect']
+    except KeyError: connect = True
+    
+    self._last_use_time = time.time()
+
+    if driver.lower() in _ALLOWED_DRIVERS.keys():
+      if connect:
+        self.reconnect()
       self.driver=driver.lower()
-      self._basecursor=_basecursors[driver]
+      self._basecursor=_BASECURSORS[driver]
+      self._cursor = self._cursor_factory()
 
   def __del__(self):
     self.close()
@@ -76,45 +127,64 @@ class Connection(object):
   def __repr__(self):
     return repr(self._db)
 
-  def _connect_mysql(self):
-    self.host = host
-    self.database = database
-    self.max_idle_time = max_idle_time
-
-    args = dict(use_unicode=True, charset="utf8",
-                db=self.database, init_command='SET time_zone = "+0:00"',
-                sql_mode="TRADITIONAL")
-    if user is not None:
-      args["user"] = user
-    if password is not None:
-      args["passwd"] = password
-
-    # We accept a path to a MySQL socket file or a host(:port) string
-    if "/" in host:
-      args["unix_socket"] = host
-    else:
-      self.socket = None
-      pair = host.split(":")
-      if len(pair) == 2:
-        args["host"] = pair[0]
-        args["port"] = int(pair[1])
-      else:
-        args["host"] = host
-        args["port"] = 3306
-    self._db = None
-    self._db_args = args
-    self._last_use_time = time.time()
-    try:
+  def _ensure_connected(self):
+    # Mysql by default closes client connections that are idle for
+    # 8 hours, but the client library does not report this fact until
+    # you try to perform a query and it fails.  Protect against this
+    # case by preemptively closing and reopening the connection
+    # if it has been idle for too long (7 hours by default).
+    if (self._db is None or (time.time() - self._last_use_time > self.max_idle_time)):
       self.reconnect()
+      self._last_use_time = time.time()
+  
+  #connection methods, driver specific attributes 
+  def _connect_mysql(self):
+    if not self._db_args:
+      args = dict(use_unicode=True, charset="utf8",
+                db=self.database,
+                sql_mode="TRADITIONAL")
+      if self.user is not None:
+        args["user"] = self.user
+      if self.password is not None:
+        args["passwd"] = self.password
+
+      # We accept a path to a MySQL socket file or a host(:port) string
+      if self.unix_socket:
+        args["unix_socket"] = self.unix_socket
+      else:
+        args["host"] = self.host
+        args["port"] = self.port if self.port else 3306
+      self._db = None
+      self._db_args = args
+    
+    try:
+      self._db = MySQLdb.connect(**self._db_args)
+      self._db.autocommit(self.autocommit)
     except Exception:
-      logging.error("Cannot connect to MySQL on %s", self.host,
+      logging.error("Cannot connect to MySQL on %s", self.host if self.host else self.unix_socket,
                     exc_info=True)
   
   def _connect_pgsql(self):
-    pass
+    if not self._db_args:
+      pass
+    try:
+      self._db = psycopg2.connect(**self._db_args)
+      self._db.autocommit = self.autocommit
+    except Exception:
+      logging.error("Cannot connect to PostgeSQL on %s", self.host if self.host else self.unix_socket,
+                    exc_info=True)
   
   def _connect_sqlite(self):
-    pass
+    if not self._db_args:
+      args = dict(database=self.path)
+      self._db = None
+      self._db_args = args
+    try:
+      self._db = sqlite3.connect(**self._db_args)
+      self._db.autocommit(self.autocommit)
+    except Exception:
+      logging.error("Cannot connect to SQLite on %s", self.path,
+                    exc_info=True)
 
   def _cursor_factory(self):
     basecursor=self._basecursor
@@ -137,11 +207,21 @@ class Connection(object):
         def _translate(self,query):
           return query
     return Cursor
+  
+  @property
+  def connected(self):
+    return self._db is not None
+  @property
+  def dsn(self):
+    return self._dsn
 
+  def setpool(self,pool):
+    self.pool=pool
+  
   def cursor(self):
     if self.driver == 'pgsql':
-      return self._db.cursor(cursor_factory=self._cursor_factory())
-    return self._db.cursor(self._cursor_factory())
+      return self._db.cursor(cursor_factory=self._cursor)
+    return self._db.cursor(self._cursor)
 
   def close(self,):
     if self.pool is not None:
@@ -155,7 +235,6 @@ class Connection(object):
     connect=getattr(self,'_connect'+self.driver)
     self.close()
     connect()
-    self._db.autocommit(False)
 
 
 class Pool(object):
@@ -163,30 +242,30 @@ class Pool(object):
   _connections=dict()
   
   def __init__(self,maxconn,**kwargs):
-    global _allowed_drivers
     self.maxconn = maxconn
-    self._weights=dict.fromkeys(_allowed_drivers.keys(),1)
-    self._loads=dict.fromkeys(_allowed_drivers.keys(),0)
+    self._weights=dict.fromkeys(_ALLOWED_DRIVERS.keys(),1)
+    self._loads=dict.fromkeys(_ALLOWED_DRIVERS.keys(),0)
     
   def _calculate_weight(self,driver=None):
     if driver == None:
+      pass
     else:
-      
+      pass
   
-  def _connect(self):
-    pass
-      
-  def getconn(self,driver,):
+  def getconn(self,dsn):
     """dsn = default None, should be DSN"""
     if dsn not in self._connections.keys():
-      self._connections[dsn] = Connection(pool=self,driver=)
-    self._loads
+      self._connections[dsn] = Connection(dsn,pool=self)
+    self._loads[dsn.split('://')[0]] += 1
     return self._connections[dsn]
 
   def putconn(self,connection=None,dsn=None,close=False):
     pass
-  def delcon(self,key=None,connection=None):
-    pass
+  
+  def delcon(self,dsn=None,connection=None):
+    self._connections[dsn].close()
+    del self._connections[dsn]
+    
   def closeall(self):
     for con in self._connections.itervalues():
       con.close()
