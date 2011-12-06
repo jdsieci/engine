@@ -37,6 +37,8 @@ import re
 import logging
 import time
 
+from tornado.ioloop import PeriodicCallback
+
 _ALLOWED_DRIVERS={}
 _BASECURSORS={}
 try:
@@ -77,15 +79,11 @@ _DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
 
 class Connection(object):
   
-  pool=None
-  _dsn=None
-  
   def __init__(self,dsn,pool=None,**kwargs):
     try:
       (exception,driver,user,password,host,port,unix_socket,dbname,path) = _DSNRE.match(dsn).groups()
     except AttributeError:
       raise
-    
     self._dsn = dsn
     if not exception:
       self.pool = pool
@@ -102,7 +100,7 @@ class Connection(object):
     
     #Optional params
     try: self.max_idle_time = kwargs['max_idle_time']
-    except KeyError: self.max_idle_time = 7*3600
+    except KeyError: self.max_idle_time = 7*3600      # default 7 hours
     try: self.autocommit = kwargs['autocommit']
     except KeyError:  self.autocommit = False
     
@@ -238,16 +236,31 @@ class Connection(object):
 
 
 class ConnectionPool(object):
-  _connections=[]
-  _in_use=[]
-  def __init__(self,dsn,maxcon=1,pool=None):
+  """A connection pool that manages connections
+  """
+  def __init__(self,dsn,maxcon=1,pool=None,**kwargs):
     self._maxcon=maxcon
     self._dsn=dsn
     self._pool=pool
+    self._connections=[]
+    self._in_use=[]
+    
+    #Optional params
+    try: cleanup_timeout = kwargs['cleanup_timeout']
+    except KeyError: cleanup_timeout = 2*3600       #default 2 hours
+    
+    self._cleaner = PeriodicCallback(self._clean_pool,cleanup_timeout*1000)
+    self._cleaner.start()
     
   def _connect(self):
-    self._connections.append
+    if self.count > self._maxcon:
+      raise PoolError('connection')
   
+  def _clean_pool(self):
+    while self._connections:
+      con = self._connections.pop()
+      con.close()
+    
   def getconn(self):
     if self.count < self._maxcon: 
       self._connections.append(Connection(self._dsn,pool=self))
@@ -284,22 +297,50 @@ class ConnectionPool(object):
 
 class Pool(object):
   """Class managing all database connections, should be one per application process"""
-  _connections=dict()
-  
-  def __init__(self,maxconn,**kwargs):
+
+  #Weight algoritms constants
+  STEP=100
+
+  def __init__(self,maxconn,cleanup_timeout=0,weight_timeout=1):
     self.maxconn = maxconn
-    self._weights=dict.fromkeys(_ALLOWED_DRIVERS.keys(),1)
     self._gets=dict()
+    self._previous_gets=dict()
+    self._connections=dict()
+    self._weight_timeout
+    #Periodic callbacks for cleaning and weight calculation
+    if cleanup_timeout > 0:
+      self._cleaner = PeriodicCallback(self._clean_pool,cleanup_timeout*1000)
+      self._cleaner.start()
+    if weight_timeout > 0:
+      self._weight = PeriodicCallback(self._calculate_weight,weight_timeout*1000)
+      self._weight.start()
     
-  def _calculate_weight(self,dsn=None):
-    if dsn is None:
-      for (dsn,pool) in self._connections.iteritems():
-        pass
-    else:
-      pass
+
+  @staticmethod
+  def instance(maxconn=200,**kwargs):
+    """Returns a global Pool instance.
+    """
+    if not hasattr(Pool,'_instance'):
+      Pool._instance = Pool(maxconn,**kwargs)
+    return Pool._instance
+  
+  @staticmethod
+  def initialized():
+    """Returns true if singleton instance has been created"""
+    return hasattr(Pool,'_instance')
+  
+  def _calculate_weight(self):
+    for dsn in self._gets.iterkeys():
+      if dsn in self._previous_gets.keys():
+        delta = self._gets[dsn] - self._previous_gets[dsn]
+      else:
+        delta = 0
+      self._connections[dsn][1]=delta/self._weight_timeout
+    self._previous_gets = self._gets
   
   def _dsn_maxcon(self,dsn):
-    return (self.maxconn*self._gets[dsn])/self.gets
+    concount=(self.maxconn/self.dsn_count + self.maxconn*self._gets[dsn]/self.gets)/self.dsn_count
+    return concount if concount <=self.maxconn else self.maxconn
   
   @property
   def count(self):
@@ -322,22 +363,26 @@ class Pool(object):
   def getconn(self,dsn):
     """dsn = default None, should be DSN"""
     if dsn not in self._connections.keys() and self.count < self.maxconn:
-      self._connections[dsn] = ConnectionPool(dsn,pool=self)
-      self._gets[dsn]=1
+      self._connections[dsn] = [ConnectionPool(dsn,pool=self),1]
+      self._gets[dsn]=0
     else:
       raise
     self._gets[dsn]+=1
-    self._connections[dsn].setmaxcon(self._dsn_maxcon(dsn))
-    return self._connections[dsn].getconn()
+    self._connections[dsn][0].setmaxcon(self._dsn_maxcon(dsn))
+    return self._connections[dsn][0].getconn()
 
   def putconn(self,dsn,connection,close=False):
-    self._connections[dsn].putconn(connection,close)
-    self._connections[dsn].setmaxcon(self._dsn_maxcon(dsn))
+    self._connections[dsn][0].putconn(connection,close)
+    self._connections[dsn][0].setmaxcon(self._dsn_maxcon(dsn))
   
   def delcon(self,dsn=None,connection=None):
-    self._connections[dsn].close()
+    self._connections[dsn][0].close()
     del self._connections[dsn]
     
   def closeall(self):
-    for con in self._connections.itervalues():
+    for con,w in self._connections.itervalues():
       con.close()
+      
+      
+class PoolError(Exception):
+  pass
