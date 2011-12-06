@@ -237,6 +237,51 @@ class Connection(object):
     connect()
 
 
+class ConnectionPool(object):
+  _connections=[]
+  _in_use=[]
+  def __init__(self,dsn,maxcon=1,pool=None):
+    self._maxcon=maxcon
+    self._dsn=dsn
+    self._pool=pool
+    
+  def _connect(self):
+    self._connections.append
+  
+  def getconn(self):
+    if self.count < self._maxcon: 
+      self._connections.append(Connection(self._dsn,pool=self))
+    
+    try:
+      connection = self._connections.pop()
+      self._in_use.append(connection)
+    except IndexError:
+      return None
+    return connection
+  
+  def putconn(self,connection,close=False):
+    try:
+      self._in_use.remove(connection)
+    except ValueError:
+      pass
+    if close or (self.count + 1 > self.maxcon):
+      connection.close()
+    else:
+      self._connections.append(connection)
+  
+  @property
+  def count(self):
+    return len(self._connections) + len(self._in_use)
+  @property
+  def maxcon(self):
+    return self._maxcon
+  
+  def setmaxcon(self,maxcon):
+    if maxcon >0:
+      self._maxcon = maxcon
+    else:
+      raise ValueError
+
 class Pool(object):
   """Class managing all database connections, should be one per application process"""
   _connections=dict()
@@ -244,23 +289,50 @@ class Pool(object):
   def __init__(self,maxconn,**kwargs):
     self.maxconn = maxconn
     self._weights=dict.fromkeys(_ALLOWED_DRIVERS.keys(),1)
-    self._loads=dict.fromkeys(_ALLOWED_DRIVERS.keys(),0)
+    self._gets=dict()
     
-  def _calculate_weight(self,driver=None):
-    if driver == None:
-      pass
+  def _calculate_weight(self,dsn=None):
+    if dsn is None:
+      for (dsn,pool) in self._connections.iteritems():
+        pass
     else:
       pass
   
+  def _dsn_maxcon(self,dsn):
+    return (self.maxconn*self._gets[dsn])/self.gets
+  
+  @property
+  def count(self):
+    counter=0
+    for (dsn,pool) in self._connections.iteritems():
+      counter+=pool.count
+    return counter
+  
+  @property
+  def dsn_count(self):
+    return len(self._connections)
+  @property
+  def gets(self):
+    """Returns global count of getconn invocation"""
+    count=0
+    for dsn in self._gets.itervalues():
+      count+=dsn
+    return count
+  
   def getconn(self,dsn):
     """dsn = default None, should be DSN"""
-    if dsn not in self._connections.keys():
-      self._connections[dsn] = Connection(dsn,pool=self)
-    self._loads[dsn.split('://')[0]] += 1
-    return self._connections[dsn]
+    if dsn not in self._connections.keys() and self.count < self.maxconn:
+      self._connections[dsn] = ConnectionPool(dsn,pool=self)
+      self._gets[dsn]=1
+    else:
+      raise
+    self._gets[dsn]+=1
+    self._connections[dsn].setmaxcon(self._dsn_maxcon(dsn))
+    return self._connections[dsn].getconn()
 
-  def putconn(self,connection=None,dsn=None,close=False):
-    pass
+  def putconn(self,dsn,connection,close=False):
+    self._connections[dsn].putconn(connection,close)
+    self._connections[dsn].setmaxcon(self._dsn_maxcon(dsn))
   
   def delcon(self,dsn=None,connection=None):
     self._connections[dsn].close()
