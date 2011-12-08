@@ -36,6 +36,7 @@ Query parameter markers:
 import re
 import logging
 import time
+import math
 
 from tornado.ioloop import PeriodicCallback
 
@@ -298,19 +299,16 @@ class ConnectionPool(object):
 class Pool(object):
   """Class managing all database connections, should be one per application process"""
 
-  #Weight algoritms constants
-  STEP=100
-
-  def __init__(self,maxconn,cleanup_timeout=0,weight_timeout=1):
+  def __init__(self,maxconn,maxconn_timeout=1,weight_timeout=10):
     self.maxconn = maxconn
     self._gets=dict()
     self._previous_gets=dict()
     self._connections=dict()
-    self._weight_timeout
+    self._weight_timeout=weight_timeout
     #Periodic callbacks for cleaning and weight calculation
-    if cleanup_timeout > 0:
-      self._cleaner = PeriodicCallback(self._clean_pool,cleanup_timeout*1000)
-      self._cleaner.start()
+    if maxconn_timeout > 0:
+      self._dsn_maxcon = PeriodicCallback(self._dsn_maxcon_calculator,maxcon_timeout*1000)
+      self._maxconn.start()
     if weight_timeout > 0:
       self._weight = PeriodicCallback(self._calculate_weight,weight_timeout*1000)
       self._weight.start()
@@ -335,17 +333,28 @@ class Pool(object):
         delta = self._gets[dsn] - self._previous_gets[dsn]
       else:
         delta = 0
-      self._connections[dsn][1]=delta/self._weight_timeout
-    self._previous_gets = self._gets
+      self._weight[dsn]=math.log(delta/self._weight_timeout+1)+1
+    self._previous_gets = self._gets.copy()
   
-  def _dsn_maxcon(self,dsn):
-    concount=(self.maxconn/self.dsn_count + self.maxconn*self._gets[dsn]/self.gets)/self.dsn_count
-    return concount if concount <=self.maxconn else self.maxconn
+  def _dsn_maxcon_calculator(self):
+    calculated_max_conn_count = 0
+    con_count={}
+    for dsn in self._connections.iterkeys():
+      con_count[dsn]= self._conn_count(dsn)
+      calculated_max_conn_count +=con_count[dsn]
+    adjustment = (.0+self.maxconn)/calculated_max_conn_count
+    for (dsn,conn) in con_count.iteritems():
+      con_count[dsn]=math.floor(conn*adjustment)
+      self._connections[dsn].setmaxcon(con_count[dsn])
+  
+  def _conn_count(self,dsn):
+    con_count=1.0*self._weight[dsn]*self.maxconn/self.dsn_count
+    return con_count
   
   @property
   def count(self):
     counter=0
-    for (dsn,pool) in self._connections.iteritems():
+    for pool in self._connections.itervalues():
       counter+=pool.count
     return counter
   
@@ -354,7 +363,7 @@ class Pool(object):
     return len(self._connections)
   @property
   def gets(self):
-    """Returns global count of getconn invocation"""
+    """Returns global count of getconn invocation, counted from Pool init"""
     count=0
     for dsn in self._gets.itervalues():
       count+=dsn
@@ -363,21 +372,22 @@ class Pool(object):
   def getconn(self,dsn):
     """dsn = default None, should be DSN"""
     if dsn not in self._connections.keys() and self.count < self.maxconn:
-      self._connections[dsn] = [ConnectionPool(dsn,pool=self),1]
+      self._connections[dsn] = ConnectionPool(dsn,pool=self)
       self._gets[dsn]=0
+      self._weight[dsn]=1
     else:
       raise
     self._gets[dsn]+=1
-    self._connections[dsn][0].setmaxcon(self._dsn_maxcon(dsn))
-    return self._connections[dsn][0].getconn()
+    return self._connections[dsn].getconn()
 
   def putconn(self,dsn,connection,close=False):
-    self._connections[dsn][0].putconn(connection,close)
-    self._connections[dsn][0].setmaxcon(self._dsn_maxcon(dsn))
+    self._connections[dsn].putconn(connection,close)
   
   def delcon(self,dsn=None,connection=None):
-    self._connections[dsn][0].close()
+    self._connections[dsn].close()
     del self._connections[dsn]
+    del self._weight[dsn]
+    del self._gets[dsn]
     
   def closeall(self):
     for con,w in self._connections.itervalues():
