@@ -22,9 +22,9 @@ DSN formats:
   driver://absolute_path_to_database
 Exceptions:
   sqlite://:memory:
-  
+
 Query parameter markers:
-  All connections use 'format' and 'pyformat'  
+  All connections use 'format' and 'pyformat'
 '''
 
 #TODO: wsteczna zgodnosci z tornado.database
@@ -79,8 +79,8 @@ _DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
                      (?P<dbname>\w+)|(?P<path>/\w+(?:/?\w+)*)) # database patterns''', re.I | re.L | re.X)
 
 class Connection(object):
-  
-  def __init__(self,dsn,pool=None,**kwargs):
+
+  def __init__(self,dsn,**kwargs):
     try:
       (exception,driver,user,password,host,port,unix_socket,dbname,path) = _DSNRE.match(dsn).groups()
     except AttributeError:
@@ -98,16 +98,16 @@ class Connection(object):
     elif exception == 'sqlite':
       self.driver = exception
       self.path = ':memory:'
-    
+
     #Optional params
     try: self.max_idle_time = kwargs['max_idle_time']
     except KeyError: self.max_idle_time = 7*3600      # default 7 hours
     try: self.autocommit = kwargs['autocommit']
     except KeyError:  self.autocommit = False
-    
+
     try: connect = kwargs['connect']
     except KeyError: connect = True
-    
+
     self._last_use_time = time.time()
 
     if driver.lower() in _ALLOWED_DRIVERS.keys():
@@ -135,8 +135,8 @@ class Connection(object):
     if (self._db is None or (time.time() - self._last_use_time > self.max_idle_time)):
       self.reconnect()
       self._last_use_time = time.time()
-  
-  #connection methods, driver specific attributes 
+
+  #connection methods, driver specific attributes
   def _connect_mysql(self):
     if not self._db_args:
       args = dict(use_unicode=True, charset="utf8",
@@ -155,14 +155,14 @@ class Connection(object):
         args["port"] = self.port if self.port else 3306
       self._db = None
       self._db_args = args
-    
+
     try:
       self._db = MySQLdb.connect(**self._db_args)
       self._db.autocommit(self.autocommit)
     except Exception:
       logging.error("Cannot connect to MySQL on %s", self.host if self.host else self.unix_socket,
                     exc_info=True)
-  
+
   def _connect_pgsql(self):
     if not self._db_args:
       pass
@@ -172,7 +172,7 @@ class Connection(object):
     except Exception:
       logging.error("Cannot connect to PostgeSQL on %s", self.host if self.host else self.unix_socket,
                     exc_info=True)
-  
+
   def _connect_sqlite(self):
     if not self._db_args:
       args = dict(database=self.path)
@@ -206,7 +206,7 @@ class Connection(object):
         def _translate(self,query):
           return query
     return Cursor
-  
+
   @property
   def connected(self):
     return self._db is not None
@@ -214,9 +214,6 @@ class Connection(object):
   def dsn(self):
     return self._dsn
 
-  def setpool(self,pool):
-    self.pool=pool
-  
   def cursor(self):
     if self.driver == 'pgsql':
       return self._db.cursor(cursor_factory=self._cursor)
@@ -228,7 +225,7 @@ class Connection(object):
     if getattr(self, "_db", None) is not None:
       self._db.close()
       self._db = None
-  
+
   def reconnect(self):
     """Closes the existing database connection and re-opens it."""
     connect=getattr(self,'_connect'+self.driver)
@@ -245,34 +242,34 @@ class ConnectionPool(object):
     self._pool=pool
     self._connections=[]
     self._in_use=[]
-    
+
     #Optional params
     try: cleanup_timeout = kwargs['cleanup_timeout']
     except KeyError: cleanup_timeout = 2*3600       #default 2 hours
-    
+
     self._cleaner = PeriodicCallback(self._clean_pool,cleanup_timeout*1000)
     self._cleaner.start()
-    
+
   def _connect(self):
     if self.count > self._maxcon:
       raise PoolError('connection')
-  
+
   def _clean_pool(self):
     while self._connections:
       con = self._connections.pop()
       con.close()
-    
+
   def getconn(self):
-    if self.count < self._maxcon: 
+    if self.count < self._maxcon:
       self._connections.append(Connection(self._dsn,pool=self))
-    
+
     try:
       connection = self._connections.pop()
       self._in_use.append(connection)
     except IndexError:
       return None
     return connection
-  
+
   def putconn(self,connection,close=False):
     try:
       self._in_use.remove(connection)
@@ -282,14 +279,14 @@ class ConnectionPool(object):
       connection.close()
     else:
       self._connections.append(connection)
-  
+
   @property
   def count(self):
     return len(self._connections) + len(self._in_use)
   @property
   def maxcon(self):
     return self._maxcon
-  
+
   def setmaxcon(self,maxcon):
     if maxcon >0:
       self._maxcon = maxcon
@@ -305,14 +302,15 @@ class Pool(object):
     self._previous_gets=dict()
     self._connections=dict()
     self._weight_timeout=weight_timeout
+    self._weight_locked=False
     #Periodic callbacks for cleaning and weight calculation
     if maxconn_timeout > 0:
-      self._dsn_maxcon = PeriodicCallback(self._dsn_maxcon_calculator,maxcon_timeout*1000)
+      self._dsn_maxcon = PeriodicCallback(self._dsn_maxcon_calculator,maxconn_timeout*1000)
       self._maxconn.start()
     if weight_timeout > 0:
       self._weight = PeriodicCallback(self._calculate_weight,weight_timeout*1000)
       self._weight.start()
-    
+
 
   @staticmethod
   def instance(maxconn=200,**kwargs):
@@ -321,21 +319,23 @@ class Pool(object):
     if not hasattr(Pool,'_instance'):
       Pool._instance = Pool(maxconn,**kwargs)
     return Pool._instance
-  
+
   @staticmethod
   def initialized():
     """Returns true if singleton instance has been created"""
     return hasattr(Pool,'_instance')
-  
+
   def _calculate_weight(self):
+    self._weight_locked=True
     for dsn in self._gets.iterkeys():
-      if dsn in self._previous_gets.keys():
+      try:
         delta = self._gets[dsn] - self._previous_gets[dsn]
-      else:
+      except KeyError:
         delta = 0
       self._weight[dsn]=math.log(delta/self._weight_timeout+1)+1
     self._previous_gets = self._gets.copy()
-  
+    self._weight_locked=False
+
   def _dsn_maxcon_calculator(self):
     calculated_max_conn_count = 0
     con_count={}
@@ -346,18 +346,20 @@ class Pool(object):
     for (dsn,conn) in con_count.iteritems():
       con_count[dsn]=math.floor(conn*adjustment)
       self._connections[dsn].setmaxcon(con_count[dsn])
-  
+
   def _conn_count(self,dsn):
     con_count=1.0*self._weight[dsn]*self.maxconn/self.dsn_count
     return con_count
-  
+
+  def _getconn(self):
+
   @property
   def count(self):
     counter=0
     for pool in self._connections.itervalues():
       counter+=pool.count
     return counter
-  
+
   @property
   def dsn_count(self):
     return len(self._connections)
@@ -368,7 +370,7 @@ class Pool(object):
     for dsn in self._gets.itervalues():
       count+=dsn
     return count
-  
+
   def getconn(self,dsn):
     """dsn = default None, should be DSN"""
     if dsn not in self._connections.keys() and self.count < self.maxconn:
@@ -382,17 +384,17 @@ class Pool(object):
 
   def putconn(self,dsn,connection,close=False):
     self._connections[dsn].putconn(connection,close)
-  
+
   def delcon(self,dsn=None,connection=None):
     self._connections[dsn].close()
     del self._connections[dsn]
     del self._weight[dsn]
     del self._gets[dsn]
-    
+
   def closeall(self):
-    for con,w in self._connections.itervalues():
+    for con in self._connections.itervalues():
       con.close()
-      
-      
+
+
 class PoolError(Exception):
   pass
