@@ -66,7 +66,7 @@ class Worker(multiprocessing.Process):
                **kwargs):
     self._application = application
     self.xheaders = xheaders
-    self.io_loop = io_loop
+    self.io_loop = io_loop or tornado.ioloop.IOLoop.instance().start()
     self.ssl_options = ssl_options
     self.server = server
     super(Worker,self).__init__(**kwargs)
@@ -78,7 +78,7 @@ class Worker(multiprocessing.Process):
                          self.ssl_options)
     try:
       server.listen(self.port,self.address)
-      tornado.ioloop.IOLoop.instance().start()
+      self.io_loop.start()
     except IOError,e:
       print e.message
       exit(0)
