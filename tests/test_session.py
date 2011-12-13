@@ -36,24 +36,21 @@ class TestDirectoryStorage:
     assert session2 == session
 
   
-@pytest.mark.skipif("not sys.modules.has_key('sqlalchemy')")
-class TestAlchemyStorage:
-  def setup_class(cls):
-    cls.dsn = ''
-
+class TestDatabaseStorage:
+  
   def test_get_empty(self,tmpdir):
-    storage = AlchemySessionStorage(self.connection,secret='')
+    storage = DatabaseSessionStorage(self.connection,secret='')
     session = self.storage.get()
     assert hasattr(session,'session_id') and hasattr(session,'hmac_digest')
 
   def test_set_session(self,tmpdir):
-    storage = AlchemySessionStorage(self.connection,secret='')
+    storage = DatabaseSessionStorage(self.connection,secret='')
     session = self.storage.get()
     self.storage.set(session)
     assert os.path.isfile(os.path.join(self.connection, 'SESSION' + str(session.session_id)))
     
   def test_get_full(self,tmpdir):
-    storage = AlchemySessionStorage(self.connection,secret='')
+    storage = DatabaseSessionStorage(self.connection,secret='')
     session = self.storage.get()
     self.storage.set(session)
     session2 = self.storage.get(session.session_id,session.hmac_digest)

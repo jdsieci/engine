@@ -148,8 +148,8 @@ class DirectorySessionStorage(BaseSessionStorage):
 
 import database      
 class DatabaseSessionStorage(BaseSessionStorage):
-  """SessionStorage using database via SQLAlchemy as session store"""
-  def __init__(self,db,**kwargs):
+  """SessionStorage using database"""
+  def __init__(self,pool,**kwargs):
     super(DatabaseSessionStorage,self).__init__(**kwargs)
     self.db=db
 

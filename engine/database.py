@@ -482,8 +482,8 @@ class Pool(object):
     del self._gets[dsn]
 
   def closeall(self):
-    for con in self._connections.itervalues():
-      con.close()
+    for pool in self._connections.itervalues():
+      pool.close()
 
 class PoolError(Exception):
   pass
