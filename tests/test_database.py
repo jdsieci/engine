@@ -1,9 +1,9 @@
 #import pytest
 import sys
 from engine import database
-from sqlalchemy.orm import Session as AlchemySession
-class TestPool:
-  disabled = not sys.modules.has_key('sqlalchemy')
+
+class TestConnectionPool:
+  disabled = True
   def setup_class(cls):
     cls.pool = database.Pool()
     cls.count = 0
@@ -13,3 +13,6 @@ class TestPool:
   def test_release_connection(self):
     connection = self.pool.get()
     self.pool.put(connection)
+    
+class TestPool:
+  disabled = True

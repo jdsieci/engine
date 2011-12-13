@@ -37,31 +37,32 @@ import re
 import logging
 import time
 import math
+import itertools
 
 from tornado.ioloop import PeriodicCallback
 
-_ALLOWED_DRIVERS={}
-_BASECURSORS={}
+__ALLOWED_DRIVERS={}
+__BASECURSORS={}
 try:
   import psycopg2
-  _ALLOWED_DRIVERS['pgsql']=psycopg2
+  __ALLOWED_DRIVERS['pgsql']=psycopg2
   import psycopg2.extensions
-  _BASECURSORS['pgsql']=psycopg2.extensions.cursor
+  __BASECURSORS['pgsql']=psycopg2.extensions.cursor
 except ImportError:
   pass
 try:
   import MySQLdb
-  _ALLOWED_DRIVERS['mysql']=MySQLdb
+  __ALLOWED_DRIVERS['mysql']=MySQLdb
   import MySQLdb.cursors
   import MySQLdb.constants
   import MySQLdb.converters
-  _BASECURSORS['mysql']=MySQLdb.cursors.Cursor
+  __BASECURSORS['mysql']=MySQLdb.cursors.Cursor
 except ImportError:
   pass
 try:
   import sqlite3
-  _ALLOWED_DRIVERS['sqlite']=sqlite3
-  _BASECURSORS['sqlite']=sqlite3.Cursor
+  __ALLOWED_DRIVERS['sqlite']=sqlite3
+  __BASECURSORS['sqlite']=sqlite3.Cursor
 except ImportError:
   pass
 #try:
@@ -72,22 +73,23 @@ except ImportError:
 #  pass
 
 #Internal CONSTANTS
-_DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
+__DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
                      (?P<driver>\w+?)://  # driver
                      (?:(?:(?P<user>\w+?)(?::(?P<password>\w+?))?@)?  # user and password pattern
                      (?:(?P<host>[\w\.]+?)(?::(?P<port>\d+))?/|(?P<unix_socket>/\w+(?:/?\w+)*):)  # host patterns
                      (?P<dbname>\w+)|(?P<path>/\w+(?:/?\w+)*)) # database patterns''', re.I | re.L | re.X)
 
+__QUERYRE = re.compile('%\((\w+)?\)s')
+
 class Connection(object):
 
   def __init__(self,dsn,**kwargs):
     try:
-      (exception,driver,user,password,host,port,unix_socket,dbname,path) = _DSNRE.match(dsn).groups()
+      (exception,driver,user,password,host,port,unix_socket,dbname,path) = __DSNRE.match(dsn).groups()
     except AttributeError:
       raise
     self._dsn = dsn
     if not exception:
-      self.pool = pool
       self.host = host
       self.port = port
       self.unix_socket = unix_socket
@@ -110,11 +112,11 @@ class Connection(object):
 
     self._last_use_time = time.time()
 
-    if driver.lower() in _ALLOWED_DRIVERS.keys():
+    if driver.lower() in __ALLOWED_DRIVERS.keys():
       if connect:
         self.reconnect()
       self.driver=driver.lower()
-      self._basecursor=_BASECURSORS[driver]
+      self._basecursor=__BASECURSORS[driver]
       self._cursor = self._cursor_factory()
 
   def __del__(self):
@@ -127,11 +129,6 @@ class Connection(object):
     return repr(self._db)
 
   def _ensure_connected(self):
-    # Mysql by default closes client connections that are idle for
-    # 8 hours, but the client library does not report this fact until
-    # you try to perform a query and it fails.  Protect against this
-    # case by preemptively closing and reopening the connection
-    # if it has been idle for too long (7 hours by default).
     if (self._db is None or (time.time() - self._last_use_time > self.max_idle_time)):
       self.reconnect()
       self._last_use_time = time.time()
@@ -165,7 +162,19 @@ class Connection(object):
 
   def _connect_pgsql(self):
     if not self._db_args:
-      pass
+      args=dict(database=self.database)
+      if self.user is not None:
+        args["user"] = self.user
+      if self.password is not None:
+        args["password"] = self.password
+      if self.unix_socket:
+        args["host"] = self.unix_socket
+      else:
+        args["host"] = self.host
+        args["port"] = self.port if self.port else 5432
+      self._db = None
+      self._db_args = args
+      
     try:
       self._db = psycopg2.connect(**self._db_args)
       self._db.autocommit = self.autocommit
@@ -185,28 +194,41 @@ class Connection(object):
       logging.error("Cannot connect to SQLite on %s", self.path,
                     exc_info=True)
 
+  #def _cursor_factory(self):
+  #  basecursor=self._basecursor
+  #  if self.driver == 'sqlite':
+  #    requery=re.compile('%\((\w+)?\)s')
+  #    class Cursor(basecursor):
+  #      def execute(self,query,parameters=None):
+  #        return super(basecursor,self).execute(self._translate(query,parameters),parameters)
+  #
+  #      def _translate(self,query,params):
+  #        if type(params) is dict:
+  #          return requery.sub(r':\1',query)
+  #        else:
+  #          return query.replace('%s','?')
+  #  else:
+  #    class Cursor(cursor):
+  #      def execute(self,query,parameters=None):
+  #        return super(basecursor,self).execute(self._translate(query,parameters),parameters)
+  #      
+  #      def _translate(self,query,params):
+  #        return query
+  #  return Cursor
   def _cursor_factory(self):
-    basecursor=self._basecursor
     if self.driver == 'sqlite':
-      requery=re.compile('%\((\w+)?\)s')
-      class Cursor(basecursor):
-        def execute(self,query,parameters=None):
-          return super(basecursor,self).execute(self._translate(query,parameters),parameters)
-
+      class Cursor(_Cursor):
         def _translate(self,query,params):
           if type(params) is dict:
-            return requery.sub(r':\1',query)
+            return __QUERYRE.sub(r':\1',query)
           else:
             return query.replace('%s','?')
-
-    if self.driver == 'sqlite':
-      class Cursor(basecursor):
-        def execute(self,query,parameters=None):
-          return super(basecursor,self).execute(self._translate(query,parameters),parameters)
-        def _translate(self,query):
+    else:
+      class Cursor(_Cursor):
+        def _translate(self,query,params):
           return query
     return Cursor
-
+  
   @property
   def connected(self):
     return self._db is not None
@@ -215,13 +237,9 @@ class Connection(object):
     return self._dsn
 
   def cursor(self):
-    if self.driver == 'pgsql':
-      return self._db.cursor(cursor_factory=self._cursor)
-    return self._db.cursor(self._cursor)
+    return self._cursor_factory()((self._db.cursor()))
 
-  def close(self,):
-    if self.pool is not None:
-      self.pool.delcon()
+  def close(self):
     if getattr(self, "_db", None) is not None:
       self._db.close()
       self._db = None
@@ -233,16 +251,78 @@ class Connection(object):
     connect()
 
 
+class _Cursor(object):
+  """Cursor wrapper class.
+  """
+  def __init__(self,cursor):
+    self._cursor=cursor
+
+  def __getattr__(self,attr):
+    return getattr(self._cursor, attr)
+
+  def __repr__(self):
+    return repr(self._cursor)
+  
+  def __del__(self):
+    self.close()
+
+  def _translate(self,query,params):
+    raise """Overrride that"""
+    
+  def execute(self,query,parameters=None):
+    return self._cursor.execute(self._translate(query,parameters),parameters)
+  
+  def iter(self):
+    column_names = self.column_names()
+    for row in self._cursor:
+      yield Row(zip(column_names,row))
+            
+  def column_names(self):
+    return [d[0] for d in self._cursor.description]
+  
+  def fetchone(self):
+    row = self._cursor.fetchone()
+    if row is not None:
+      return Row(zip(self.column_names(),row))
+    else:
+      return None
+    
+  def fetchmany(self,*args,**kwargs):
+    rowlist=self._cursor.fetchmany(*args,**kwargs)
+    column_names=self.column_names()
+    return [Row(itertools.izip(column_names,row)) for row in rowlist]
+  
+  def fetchall(self):
+    column_names=self.column_names()
+    return [Row(itertools.izip(column_names,row)) for row in self._cursor.fetchall()]  
+
+  def close(self):
+    if getattr(self, "_cursor", None) is not None:
+      self._cursor.close()
+      self._cursor = None
+
+    
+class Row(dict):
+  """A dict that allows for object-like property access syntax"""
+  def __getattr__(self,name):
+    try:
+      return self[name]
+    except KeyError:
+      raise AttributeError(name)
+
+
 class ConnectionPool(object):
   """A connection pool that manages connections
   """
-  def __init__(self,dsn,maxcon=1,pool=None,**kwargs):
+  def __init__(self,dsn,mincon=1,maxcon=1,pool=None,**kwargs):
+    self._mincon=mincon
     self._maxcon=maxcon
     self._dsn=dsn
     self._pool=pool
     self._connections=[]
     self._in_use=[]
-
+    for i in range(mincon):
+      self._connect()
     #Optional params
     try: cleanup_timeout = kwargs['cleanup_timeout']
     except KeyError: cleanup_timeout = 2*3600       #default 2 hours
@@ -252,7 +332,8 @@ class ConnectionPool(object):
 
   def _connect(self):
     if self.count > self._maxcon:
-      raise PoolError('connection')
+      raise PoolError('connection pool exausted')
+    self._connections.append(Connection(self._dsn))
 
   def _clean_pool(self):
     while self._connections:
@@ -260,9 +341,7 @@ class ConnectionPool(object):
       con.close()
 
   def getconn(self):
-    if self.count < self._maxcon:
-      self._connections.append(Connection(self._dsn,pool=self))
-
+    self._connect()
     try:
       connection = self._connections.pop()
       self._in_use.append(connection)
@@ -296,8 +375,12 @@ class ConnectionPool(object):
 class Pool(object):
   """Class managing all database connections, should be one per application process"""
 
-  def __init__(self,maxconn,maxconn_timeout=1,weight_timeout=10):
-    self.maxconn = maxconn
+  def __init__(self,maxpools=None,
+               maxconn=None,
+               maxconn_timeout=1,
+               weight_timeout=10):
+    self.maxpools = maxpools or 30
+    self.maxconn = maxconn if maxconn or maxconn >= maxpools else (maxpools*10)
     self._gets=dict()
     self._previous_gets=dict()
     self._connections=dict()
@@ -308,7 +391,7 @@ class Pool(object):
       self._dsn_maxcon = PeriodicCallback(self._dsn_maxcon_calculator,maxconn_timeout*1000)
       self._maxconn.start()
     if weight_timeout > 0:
-      self._weight = PeriodicCallback(self._calculate_weight,weight_timeout*1000)
+      self._weight = PeriodicCallback(self._weight_calculator,weight_timeout*1000)
       self._weight.start()
 
 
@@ -325,7 +408,7 @@ class Pool(object):
     """Returns true if singleton instance has been created"""
     return hasattr(Pool,'_instance')
 
-  def _calculate_weight(self):
+  def _weight_calculator(self):
     self._weight_locked=True
     for dsn in self._gets.iterkeys():
       try:
@@ -351,10 +434,17 @@ class Pool(object):
     con_count=1.0*self._weight[dsn]*self.maxconn/self.dsn_count
     return con_count
 
-  def _getconn(self):
-
+  def _createpool(self,dsn):
+    if self.dsn_count < self.maxpools:
+      self._connections[dsn] = ConnectionPool(dsn,pool=self)
+      self._gets[dsn]=0
+      self._weight[dsn]=1
+    else:
+      raise PoolError('Pool of pools exeeded')
+  
   @property
   def count(self):
+    """Returns Connections global count"""
     counter=0
     for pool in self._connections.itervalues():
       counter+=pool.count
@@ -362,7 +452,9 @@ class Pool(object):
 
   @property
   def dsn_count(self):
+    """Returns ConnectionPools count"""
     return len(self._connections)
+  
   @property
   def gets(self):
     """Returns global count of getconn invocation, counted from Pool init"""
@@ -372,11 +464,9 @@ class Pool(object):
     return count
 
   def getconn(self,dsn):
-    """dsn = default None, should be DSN"""
-    if dsn not in self._connections.keys() and self.count < self.maxconn:
-      self._connections[dsn] = ConnectionPool(dsn,pool=self)
-      self._gets[dsn]=0
-      self._weight[dsn]=1
+    """Gets connection from specific ConnectionPool"""
+    if dsn not in self._connections.keys():
+      self._createpool(dsn)
     else:
       raise
     self._gets[dsn]+=1
@@ -394,7 +484,6 @@ class Pool(object):
   def closeall(self):
     for con in self._connections.itervalues():
       con.close()
-
 
 class PoolError(Exception):
   pass
