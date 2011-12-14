@@ -237,7 +237,7 @@ class Connection(object):
     return self._dsn
 
   def cursor(self):
-    return self._cursor_factory()((self._db.cursor()))
+    return self._cursor_factory()(self._db.cursor())
 
   def close(self):
     if getattr(self, "_db", None) is not None:
@@ -276,7 +276,8 @@ class _Cursor(object):
     column_names = self.column_names()
     for row in self._cursor:
       yield Row(zip(column_names,row))
-            
+
+  @property            
   def column_names(self):
     return [d[0] for d in self._cursor.description]
   
@@ -380,7 +381,7 @@ class Pool(object):
                maxconn_timeout=1,
                weight_timeout=10):
     self.maxpools = maxpools or 30
-    self.maxconn = maxconn if maxconn or maxconn >= maxpools else (maxpools*10)
+    self.maxconn = maxconn if maxconn and maxconn >= maxpools else (maxpools*10)
     self._gets=dict()
     self._previous_gets=dict()
     self._connections=dict()
