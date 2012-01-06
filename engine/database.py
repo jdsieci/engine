@@ -41,28 +41,28 @@ import itertools
 
 from tornado.ioloop import PeriodicCallback
 
-__ALLOWED_DRIVERS={}
-__BASECURSORS={}
+_ALLOWED_DRIVERS={}
+_BASECURSORS={}
 try:
   import psycopg2
-  __ALLOWED_DRIVERS['pgsql']=psycopg2
+  _ALLOWED_DRIVERS['pgsql']=psycopg2
   import psycopg2.extensions
-  __BASECURSORS['pgsql']=psycopg2.extensions.cursor
+  _BASECURSORS['pgsql']=psycopg2.extensions.cursor
 except ImportError:
   pass
 try:
   import MySQLdb
-  __ALLOWED_DRIVERS['mysql']=MySQLdb
+  _ALLOWED_DRIVERS['mysql']=MySQLdb
   import MySQLdb.cursors
   import MySQLdb.constants
   import MySQLdb.converters
-  __BASECURSORS['mysql']=MySQLdb.cursors.Cursor
+  _BASECURSORS['mysql']=MySQLdb.cursors.Cursor
 except ImportError:
   pass
 try:
   import sqlite3
-  __ALLOWED_DRIVERS['sqlite']=sqlite3
-  __BASECURSORS['sqlite']=sqlite3.Cursor
+  _ALLOWED_DRIVERS['sqlite']=sqlite3
+  _BASECURSORS['sqlite']=sqlite3.Cursor
 except ImportError:
   pass
 #try:
@@ -73,22 +73,24 @@ except ImportError:
 #  pass
 
 #Internal CONSTANTS
-__DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
+_DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
                      (?P<driver>\w+?)://  # driver
                      (?:(?:(?P<user>\w+?)(?::(?P<password>\w+?))?@)?  # user and password pattern
                      (?:(?P<host>[\w\.]+?)(?::(?P<port>\d+))?/|(?P<unix_socket>/\w+(?:/?\w+)*):)  # host patterns
                      (?P<dbname>\w+)|(?P<path>/\w+(?:/?\w+)*)) # database patterns''', re.I | re.L | re.X)
 
-__QUERYRE = re.compile('%\((\w+)?\)s')
+_QUERYRE = re.compile('%\((\w+)?\)s')
 
 class Connection(object):
 
   def __init__(self,dsn,**kwargs):
     try:
-      (exception,driver,user,password,host,port,unix_socket,dbname,path) = __DSNRE.match(dsn).groups()
+      (exception,driver,user,password,host,port,unix_socket,dbname,path) = _DSNRE.match(dsn).groups()
     except AttributeError:
       raise
     self._dsn = dsn
+    self._db_args = None
+    self._db = None
     if not exception:
       self.host = host
       self.port = port
@@ -98,9 +100,10 @@ class Connection(object):
       self.password = password
       self.user = user
     elif exception == 'sqlite':
-      self.driver = exception
+      driver = exception
+      #self.driver = exception
       self.path = ':memory:'
-
+      
     #Optional params
     try: self.max_idle_time = kwargs['max_idle_time']
     except KeyError: self.max_idle_time = 7*3600      # default 7 hours
@@ -111,19 +114,23 @@ class Connection(object):
     except KeyError: connect = True
 
     self._last_use_time = time.time()
-
-    if driver.lower() in __ALLOWED_DRIVERS.keys():
+    
+    if driver.lower() in _ALLOWED_DRIVERS.keys():
+      self.driver=driver.lower()
+      self._basecursor=_BASECURSORS[driver]
+      self._cursor = self._cursor_factory()
       if connect:
         self.reconnect()
-      self.driver=driver.lower()
-      self._basecursor=__BASECURSORS[driver]
-      self._cursor = self._cursor_factory()
+    
 
   def __del__(self):
     self.close()
 
   def __getattr__(self,attr):
-    return getattr(self._db, attr)
+    if not self._db:
+      return getattr(self._db, attr)
+    else:
+      raise AttributeError
 
   def __repr__(self):
     return repr(self._db)
@@ -189,7 +196,7 @@ class Connection(object):
       self._db_args = args
     try:
       self._db = sqlite3.connect(**self._db_args)
-      self._db.autocommit(self.autocommit)
+      #self._db.autocommit(self.autocommit)
     except Exception:
       logging.error("Cannot connect to SQLite on %s", self.path,
                     exc_info=True)
@@ -220,7 +227,7 @@ class Connection(object):
       class Cursor(_Cursor):
         def _translate(self,query,params):
           if type(params) is dict:
-            return __QUERYRE.sub(r':\1',query)
+            return _QUERYRE.sub(r':\1',query)
           else:
             return query.replace('%s','?')
     else:
@@ -237,7 +244,7 @@ class Connection(object):
     return self._dsn
 
   def cursor(self):
-    return self._cursor_factory()(self._db.cursor())
+    return self._cursor(self._db.cursor())
 
   def close(self):
     if getattr(self, "_db", None) is not None:
@@ -246,7 +253,7 @@ class Connection(object):
 
   def reconnect(self):
     """Closes the existing database connection and re-opens it."""
-    connect=getattr(self,'_connect'+self.driver)
+    connect=getattr(self,'_connect_'+self.driver)
     self.close()
     connect()
 
@@ -255,28 +262,45 @@ class _Cursor(object):
   """Cursor wrapper class.
   """
   def __init__(self,cursor):
-    self._cursor=cursor
+    self._cursor = cursor
+    self._del = False
 
   def __getattr__(self,attr):
-    return getattr(self._cursor, attr)
+    if self._cursor:
+      return getattr(self._cursor, attr)
+    else:
+      raise AttributeError
 
+  def __iter__(self):
+    return self
+  
+  def __len__(self):
+  
   def __repr__(self):
     return repr(self._cursor)
   
   def __del__(self):
+    self._del = True
     self.close()
 
   def _translate(self,query,params):
-    raise """Overrride that"""
+    raise """Override that"""
     
   def execute(self,query,parameters=None):
-    return self._cursor.execute(self._translate(query,parameters),parameters)
+    if parameters:
+      return self._cursor.execute(self._translate(query,parameters),parameters)
+    else:
+      return self._cursor.execute(self._translate(query,parameters))
   
   def iter(self):
-    column_names = self.column_names()
+    column_names = self.column_names
     for row in self._cursor:
       yield Row(zip(column_names,row))
-
+  
+  def next(self):
+    row = self._cursor.next()
+    return Row(zip(self.column_names,row))
+  
   @property            
   def column_names(self):
     return [d[0] for d in self._cursor.description]
@@ -284,7 +308,7 @@ class _Cursor(object):
   def fetchone(self):
     row = self._cursor.fetchone()
     if row is not None:
-      return Row(zip(self.column_names(),row))
+      return Row(zip(self.column_names,row))
     else:
       return None
     
@@ -299,7 +323,13 @@ class _Cursor(object):
 
   def close(self):
     if getattr(self, "_cursor", None) is not None:
-      self._cursor.close()
+      if self._del:
+        try:
+          self._cursor.close()
+        except:
+          pass
+      else:
+        self._cursor.close()
       self._cursor = None
 
     
