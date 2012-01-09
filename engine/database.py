@@ -134,7 +134,7 @@ class Connection(object):
 
   def __repr__(self):
     return repr(self._db)
-
+      
   def _ensure_connected(self):
     if (self._db is None or (time.time() - self._last_use_time > self.max_idle_time)):
       self.reconnect()
@@ -196,35 +196,16 @@ class Connection(object):
       self._db_args = args
     try:
       self._db = sqlite3.connect(**self._db_args)
-      #self._db.autocommit(self.autocommit)
+      if self.autocommit:
+        self._db.isolation_level = None
     except Exception:
       logging.error("Cannot connect to SQLite on %s", self.path,
                     exc_info=True)
 
-  #def _cursor_factory(self):
-  #  basecursor=self._basecursor
-  #  if self.driver == 'sqlite':
-  #    requery=re.compile('%\((\w+)?\)s')
-  #    class Cursor(basecursor):
-  #      def execute(self,query,parameters=None):
-  #        return super(basecursor,self).execute(self._translate(query,parameters),parameters)
-  #
-  #      def _translate(self,query,params):
-  #        if type(params) is dict:
-  #          return requery.sub(r':\1',query)
-  #        else:
-  #          return query.replace('%s','?')
-  #  else:
-  #    class Cursor(cursor):
-  #      def execute(self,query,parameters=None):
-  #        return super(basecursor,self).execute(self._translate(query,parameters),parameters)
-  #      
-  #      def _translate(self,query,params):
-  #        return query
-  #  return Cursor
   def _cursor_factory(self):
     if self.driver == 'sqlite':
       class Cursor(_Cursor):
+        connection = self
         def _translate(self,query,params):
           if type(params) is dict:
             return _QUERYRE.sub(r':\1',query)
@@ -248,6 +229,7 @@ class Connection(object):
 
   def close(self):
     if getattr(self, "_db", None) is not None:
+      self._db.rollback()
       self._db.close()
       self._db = None
 
@@ -256,6 +238,22 @@ class Connection(object):
     connect=getattr(self,'_connect_'+self.driver)
     self.close()
     connect()
+    
+  #DBAPI extension
+  def execute(self,query,parameters=None):
+    cursor = self.cursor()
+    cursor.execute(query,parameters)
+    return cursor
+  
+  def executemany(self,query,seq):
+    cursor = self.cursor()
+    cursor.executemany(query,seq)
+    return cursor
+
+  def executescript(self,sql):
+    cursor = self.cursor()
+    cursor.executescript(sql)
+    return cursor
 
 
 class _Cursor(object):
@@ -275,6 +273,7 @@ class _Cursor(object):
     return self
   
   def __len__(self):
+    return self._cursor.rowcount
   
   def __repr__(self):
     return repr(self._cursor)
@@ -288,9 +287,24 @@ class _Cursor(object):
     
   def execute(self,query,parameters=None):
     if parameters:
-      return self._cursor.execute(self._translate(query,parameters),parameters)
+      self._cursor.execute(self._translate(query,parameters),parameters)
     else:
-      return self._cursor.execute(self._translate(query,parameters))
+      self._cursor.execute(self._translate(query,parameters))
+    return self
+  
+  def executemany(self,query,seq):
+    self.executemany(self._translate(query,seq[0]), seq)
+    return self
+  
+  def executescript(self,sql):
+    self.connection.commit()
+    try:
+      self._cursor.execute(sql)
+    except:
+      self.connection.rollback()
+    else:
+      self.connection.commit()
+    return self
   
   def iter(self):
     column_names = self.column_names

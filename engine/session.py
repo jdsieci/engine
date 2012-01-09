@@ -49,7 +49,7 @@ import os.path
 import hmac
 import hashlib
 import uuid
-
+from tornado.options import define, options
 
 class _Session(dict):
   """ A Session is basically a dict with a session_id and an hmac_digest string to verify access rights """
@@ -151,8 +151,14 @@ class DatabaseSessionStorage(BaseSessionStorage):
   """SessionStorage using database"""
   def __init__(self,pool,**kwargs):
     super(DatabaseSessionStorage,self).__init__(**kwargs)
-    self.db=db
-
+    self.pool = pool
+    self.connection = self.pool.get(self.dsn)
+    self._create_tables()
+    
+  def _create_tables(self):
+    cursor = self.connection.cursor()
+    cursor.executescript()
+  
   def get(self,session_id=None,hmac_digest=None):
     pass
   

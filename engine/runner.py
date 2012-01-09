@@ -39,6 +39,7 @@ define('pidfile',default=None,help='')
 define('user',default=None,help='')
 define('group',default=None,help='')
 define('logfile',default=None,help='Path to logfile default stdout')
+define('workers',default=os.sysconf("SC_NPROCESSORS_ONLN"),type=int,help='Quantity of worker processes, running more than %i is not recommended' % (os.sysconf("SC_NPROCESSORS_ONLN")*2))
 
 
 #TODO: obsluga sygnalow, przeladowanie konfiguracji !!!
