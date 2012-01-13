@@ -17,7 +17,7 @@ Based on: http://caines.ca/blog/programming/sessions-in-tornado/
 
 Multiple storage added
 
-Usage: 
+Usage:
 In your application script,
     settings["session_secret"] = 'some secret password!!'
     settings["session_dir"] = 'sessions'  # the directory to store sessions in
@@ -25,18 +25,18 @@ In your application script,
 
 In your RequestHandler (probably in __init__),
     self.session = session.Session(self.application.session_manager, self)
-    
+
 After that, you can use it like this (in get(), post(), etc):
     self.session['blah'] = 1234
     self.save()
     blah = self.session['blah']
-    
+
     etc.
 
 
 the basic session mechanism is this:
 * take some data, pickle it, store it somewhere.
-* assign an id to it. run that id through a HMAC (NOT just a hash function) to prevent tampering. 
+* assign an id to it. run that id through a HMAC (NOT just a hash function) to prevent tampering.
 * put the id and HMAC output in a cookie.
 * when you get a request, load the id, verify the HMAC. if it matches, load the data from wherever you put it and depickle it.
 
@@ -72,19 +72,33 @@ class BaseSessionStorage(object):
     It must retrun _Session object
     """
     raise InvalidSessionException('Need to be implemented')
-  
+
   def set(self, session):
     """ Puts session to storage. Needs to be implemented in child class.
     It must retrun _Session object
     """
     raise InvalidSessionException('Need to be implemented')
 
+  def _generate_session(self,session_id=None,hamac_digest=None):
+    if session_id == None:
+      session_should_exist = False
+      session_id = self._generate_uid()
+      hmac_digest = self._get_hmac_digest(session_id)
+    else:
+      session_should_exist = True
+      session_id = session_id
+      hmac_digest = hmac_digest   # keyed-Hash Message Authentication Code
+
+    # make sure the HMAC digest we generate matches the given one, to validate
+    expected_hmac_digest = self._get_hmac_digest(session_id)
+    return (session_should_exist, expected_hmac_digest, session_id, hmac_digest)
+
   def _get_hmac_digest(self, session_id):
     return hmac.new(session_id, self.secret, hashlib.sha1).hexdigest()
-               
+
   def _generate_uid(self):
     base = hashlib.md5( self.secret + str(uuid.uuid4()) )
-    return base.hexdigest()       
+    return base.hexdigest()
 
 
 
@@ -97,11 +111,11 @@ class DirectorySessionStorage(BaseSessionStorage):
     if session_dir == '':
       session_dir = os.path.join(os.path.dirname(__file__), 'sessions')
     self.session_dir = session_dir
-                
+
 
   def _read(self, session_id):
     session_path = self._get_session_path(session_id)
-    try : 
+    try :
       data = pickle.load(open(session_path))
       if type(data) == type({}):
         return data
@@ -109,22 +123,23 @@ class DirectorySessionStorage(BaseSessionStorage):
         return {}
     except IOError:
       return {}
-        
+
   def get(self, session_id = None, hmac_digest = None):
     # set up the session state (create it from scratch, or from parameters
-    if session_id == None:
-      session_should_exist = False
-      session_id = self._generate_uid()
-      hmac_digest = self._get_hmac_digest(session_id)
-    else:
-      session_should_exist = True
-      session_id = session_id
-      hmac_digest = hmac_digest   # keyed-Hash Message Authentication Code
+    #if session_id == None:
+    #  session_should_exist = False
+    #  session_id = self._generate_uid()
+    #  hmac_digest = self._get_hmac_digest(session_id)
+    #else:
+    #  session_should_exist = True
+    #  session_id = session_id
+    #  hmac_digest = hmac_digest   # keyed-Hash Message Authentication Code
 
     # make sure the HMAC digest we generate matches the given one, to validate
-    expected_hmac_digest = self._get_hmac_digest(session_id)
+    #expected_hmac_digest = self._get_hmac_digest(session_id)
+    (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
     if hmac_digest != expected_hmac_digest:
-      raise InvalidSessionException()        
+      raise InvalidSessionException()
 
     # create the session object
     session = _Session(session_id, hmac_digest)
@@ -134,9 +149,9 @@ class DirectorySessionStorage(BaseSessionStorage):
       data = self._read(session_id)
       for i, j in data.iteritems():
         session[i] = j
-        
+
     return session
-    
+
   def _get_session_path(self, session_id):
     return os.path.join(self.session_dir, 'SESSION' + str(session_id))
 
@@ -146,7 +161,7 @@ class DirectorySessionStorage(BaseSessionStorage):
     pickle.dump(dict(session.items()), session_file)
     session_file.close()
 
-import database      
+import database
 class DatabaseSessionStorage(BaseSessionStorage):
   """SessionStorage using database"""
   def __init__(self,pool,**kwargs):
@@ -154,17 +169,48 @@ class DatabaseSessionStorage(BaseSessionStorage):
     self.pool = pool
     self.connection = self.pool.get(self.dsn)
     self._create_tables()
-    
+
   def _create_tables(self):
     cursor = self.connection.cursor()
     cursor.executescript()
-  
+
   def get(self,session_id=None,hmac_digest=None):
+    (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
     pass
-  
+
   def set(self,session):
     pass
-             
+
+#TODO: zaimplementowac memcache
+try:
+  import memcache
+
+  class MemcacheSessionStorage(BaseSessionStorage):
+    def __init__(self, session_dir = '', **kwargs):
+      super(DirectorySessionStorage,self).__init__(**kwargs)
+
+    def get(self, session_id = None, hmac_digest = None):
+
+      (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
+      if hmac_digest != expected_hmac_digest:
+        raise InvalidSessionException()
+
+      # create the session object
+      session = _Session(session_id, hmac_digest)
+
+      # read the session file, if this is a pre-existing session
+      if session_should_exist:
+        data = self._read(session_id)
+        for i, j in data.iteritems():
+          session[i] = j
+      return session
+
+    def set(self, session):
+      pass
+
+except ImportError:
+  pass
+
 class SessionManager(object):
   """ A SessionManager is specifically for use in Tornado, using Tornado's cookies """
   def __init__(self,sessionstorage,**kwargs):
@@ -181,9 +227,9 @@ class SessionManager(object):
 
   def set(self, requestHandler, session):
     requestHandler.set_secure_cookie("session_id", session.session_id)
-    requestHandler.set_secure_cookie("hmac_digest", session.hmac_digest)        
+    requestHandler.set_secure_cookie("hmac_digest", session.hmac_digest)
     return self.sessionstorage.set(session)
-        
+
 class Session(_Session):
   """ A TornadoSession is a Session object for use in Tornado """
   def __init__(self, tornado_session_manager, request_handler):
@@ -199,11 +245,8 @@ class Session(_Session):
       self[i] = j
     self.session_id = plain_session.session_id
     self.hmac_digest = plain_session.hmac_digest
-            
-            
-    
   def save(self):
     self.session_manager.set(self.request_handler, self)
-        
-class InvalidSessionException(Exception):        
+
+class InvalidSessionException(Exception):
   pass
