@@ -174,12 +174,32 @@ class DatabaseSessionStorage(BaseSessionStorage):
     cursor = self.connection.cursor()
     cursor.executescript()
 
+  def _read(self, session_id):
+    cursor = self.connection.execute('SELECT * FROM session WHERE session_id=%s',session_id)
+    try :
+      data = pickle.loads(cursor.fetchone().content)
+      if type(data) == type({}):
+        return data
+      else:
+        return {}
+    except IOError:
+      return {}
+
   def get(self,session_id=None,hmac_digest=None):
     (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
-    pass
+    session = _Session(session_id, hmac_digest)
+    if session_should_exist:
+      data = self._read(session_id)
+      for i, j in data.iteritems():
+        session[i] = j
+    return session
 
   def set(self,session):
-    pass
+    pickled = pickle.dumps(dict(session.items()))
+    try:
+      self.connection.execute('INSERT INTO session VALUES(%(session_id)s,%(content)s)',{'session_id': session.session_id, 'content': pickled})
+    except database.IntegrityError:
+      self.connection.execute('UPDATE session SET content = %(content)s WHERE session_id = %(session_id)s',{'session_id': session.session_id, 'content': pickled})
 
 #TODO: zaimplementowac memcache
 try:

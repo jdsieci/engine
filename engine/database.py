@@ -38,21 +38,28 @@ import logging
 import time
 import math
 import itertools
+import exceptions
 
 from tornado.ioloop import PeriodicCallback
 
 _ALLOWED_DRIVERS={}
 _BASECURSORS={}
+_ERRORS={}
+_WARNINGS={}
 try:
   import psycopg2
   _ALLOWED_DRIVERS['pgsql']=psycopg2
   import psycopg2.extensions
+  _ERRORS['pgsql']=psycopg2.Error
+  _WARNINGS['pgsql']=psycopg2.Warning
   _BASECURSORS['pgsql']=psycopg2.extensions.cursor
 except ImportError:
   pass
 try:
   import MySQLdb
   _ALLOWED_DRIVERS['mysql']=MySQLdb
+  _ERRORS['mysql']=MySQLdb.Error
+  _WARNINGS['mysql']=MySQLdb.Warning
   import MySQLdb.cursors
   import MySQLdb.constants
   import MySQLdb.converters
@@ -63,6 +70,8 @@ try:
   import sqlite3
   _ALLOWED_DRIVERS['sqlite']=sqlite3
   _BASECURSORS['sqlite']=sqlite3.Cursor
+  _ERRORS['sqlite']=sqlite3.Error
+  _WARNINGS['sqlite']=sqlite3.Warning
 except ImportError:
   pass
 #try:
@@ -71,6 +80,7 @@ except ImportError:
 #  _BASECURSORS['odbc']=pyodbc.Cursor
 #except ImportError:
 #  pass
+
 
 #Internal CONSTANTS
 _DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
@@ -81,6 +91,14 @@ _DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
 
 _QUERYRE = re.compile('%\((\w+)?\)s')
 
+
+def connect(dsn,**kwargs):
+  return Connection(dsn,**kwargs)
+
+
+
+
+try:
 class Connection(object):
 
   def __init__(self,dsn,**kwargs):
@@ -103,7 +121,7 @@ class Connection(object):
       driver = exception
       #self.driver = exception
       self.path = ':memory:'
-      
+
     #Optional params
     try: self.max_idle_time = kwargs['max_idle_time']
     except KeyError: self.max_idle_time = 7*3600      # default 7 hours
@@ -114,27 +132,27 @@ class Connection(object):
     except KeyError: connect = True
 
     self._last_use_time = time.time()
-    
+
     if driver.lower() in _ALLOWED_DRIVERS.keys():
       self.driver=driver.lower()
       self._basecursor=_BASECURSORS[driver]
       self._cursor = self._cursor_factory()
       if connect:
         self.reconnect()
-    
+
 
   def __del__(self):
     self.close()
 
   def __getattr__(self,attr):
-    if not self._db:
+    if self._db is not None:
       return getattr(self._db, attr)
     else:
       raise AttributeError
 
   def __repr__(self):
     return repr(self._db)
-      
+
   def _ensure_connected(self):
     if (self._db is None or (time.time() - self._last_use_time > self.max_idle_time)):
       self.reconnect()
@@ -181,10 +199,11 @@ class Connection(object):
         args["port"] = self.port if self.port else 5432
       self._db = None
       self._db_args = args
-      
+
     try:
       self._db = psycopg2.connect(**self._db_args)
-      self._db.autocommit = self.autocommit
+      if self.autocommit:
+        self._db.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     except Exception:
       logging.error("Cannot connect to PostgeSQL on %s", self.host if self.host else self.unix_socket,
                     exc_info=True)
@@ -213,10 +232,11 @@ class Connection(object):
             return query.replace('%s','?')
     else:
       class Cursor(_Cursor):
+        connection = self
         def _translate(self,query,params):
           return query
     return Cursor
-  
+
   @property
   def connected(self):
     return self._db is not None
@@ -238,13 +258,13 @@ class Connection(object):
     connect=getattr(self,'_connect_'+self.driver)
     self.close()
     connect()
-    
+
   #DBAPI extension
   def execute(self,query,parameters=None):
     cursor = self.cursor()
     cursor.execute(query,parameters)
     return cursor
-  
+
   def executemany(self,query,seq):
     cursor = self.cursor()
     cursor.executemany(query,seq)
@@ -264,38 +284,38 @@ class _Cursor(object):
     self._del = False
 
   def __getattr__(self,attr):
-    if self._cursor:
+    if self._cursor is not None:
       return getattr(self._cursor, attr)
     else:
       raise AttributeError
 
   def __iter__(self):
     return self
-  
+
   def __len__(self):
     return self._cursor.rowcount
-  
+
   def __repr__(self):
     return repr(self._cursor)
-  
+
   def __del__(self):
     self._del = True
     self.close()
 
   def _translate(self,query,params):
     raise """Override that"""
-    
+
   def execute(self,query,parameters=None):
     if parameters:
       self._cursor.execute(self._translate(query,parameters),parameters)
     else:
       self._cursor.execute(self._translate(query,parameters))
     return self
-  
+
   def executemany(self,query,seq):
     self.executemany(self._translate(query,seq[0]), seq)
     return self
-  
+
   def executescript(self,sql):
     self.connection.commit()
     try:
@@ -305,35 +325,35 @@ class _Cursor(object):
     else:
       self.connection.commit()
     return self
-  
+
   def iter(self):
     column_names = self.column_names
     for row in self._cursor:
       yield Row(zip(column_names,row))
-  
+
   def next(self):
     row = self._cursor.next()
     return Row(zip(self.column_names,row))
-  
-  @property            
+
+  @property
   def column_names(self):
     return [d[0] for d in self._cursor.description]
-  
+
   def fetchone(self):
     row = self._cursor.fetchone()
     if row is not None:
       return Row(zip(self.column_names,row))
     else:
       return None
-    
+
   def fetchmany(self,*args,**kwargs):
     rowlist=self._cursor.fetchmany(*args,**kwargs)
-    column_names=self.column_names()
+    column_names=self.column_names
     return [Row(itertools.izip(column_names,row)) for row in rowlist]
-  
+
   def fetchall(self):
-    column_names=self.column_names()
-    return [Row(itertools.izip(column_names,row)) for row in self._cursor.fetchall()]  
+    column_names=self.column_names
+    return [Row(itertools.izip(column_names,row)) for row in self._cursor.fetchall()]
 
   def close(self):
     if getattr(self, "_cursor", None) is not None:
@@ -346,7 +366,7 @@ class _Cursor(object):
         self._cursor.close()
       self._cursor = None
 
-    
+
 class Row(dict):
   """A dict that allows for object-like property access syntax"""
   def __getattr__(self,name):
@@ -354,6 +374,9 @@ class Row(dict):
       return self[name]
     except KeyError:
       raise AttributeError(name)
+
+except exceptions.StandardError, exc:
+  _reraise(type(exc),exc,None)
 
 
 class ConnectionPool(object):
@@ -486,7 +509,7 @@ class Pool(object):
       self._weight[dsn]=1
     else:
       raise PoolError('Pool of pools exeeded')
-  
+
   @property
   def count(self):
     """Returns Connections global count"""
@@ -499,7 +522,7 @@ class Pool(object):
   def dsn_count(self):
     """Returns ConnectionPools count"""
     return len(self._connections)
-  
+
   @property
   def gets(self):
     """Returns global count of getconn invocation, counted from Pool init"""
@@ -531,4 +554,62 @@ class Pool(object):
       pool.close()
 
 class PoolError(Exception):
+  pass
+
+def _reraise(t,value,traceback):
+  exc_name = str(t).partition("'")[2].rpartition("'")[0].partition('.')[2]
+  exc = value
+  if exc_name == 'Error':
+    raise Error(exc)
+  elif exc_name == 'Warning':
+    raise Warning(exc)
+  elif exc_name == 'InterfaceError':
+    raise InterfaceError(exc)
+  elif exc_name == 'DatabaseError':
+    raise DatabaseError(exc)
+  elif exc_name == 'DataError':
+    raise DataError(exc)
+  elif exc_name == 'OperationalError':
+    raise OperationalError(exc)
+  elif exc_name == 'IntegrityError':
+    raise IntegrityError(exc)
+  elif exc_name == 'InternalError':
+    raise InternalError(exc)
+  elif exc_name == 'ProgrammingError':
+    raise ProgrammingError(exc)
+  elif exc_name == 'NotSupportedError':
+    raise NotSupportedError(exc)
+
+
+
+
+
+class Error(exceptions.StandardError):
+  pass
+
+class Warning(exceptions.StandardError):
+  pass
+
+class InterfaceError(Error):
+  pass
+
+class DatabaseError(Error):
+  pass
+
+class DataError(DatabaseError):
+  pass
+
+class OperationalError(DatabaseError):
+  pass
+
+class IntegrityError(DatabaseError):
+  pass
+
+class InternalError(DatabaseError):
+  pass
+
+class ProgrammingError(DatabaseError):
+  pass
+
+class NotSupportedError(DatabaseError):
   pass
