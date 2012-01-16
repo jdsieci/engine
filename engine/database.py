@@ -50,16 +50,12 @@ try:
   import psycopg2
   _ALLOWED_DRIVERS['pgsql']=psycopg2
   import psycopg2.extensions
-  _ERRORS['pgsql']=psycopg2.Error
-  _WARNINGS['pgsql']=psycopg2.Warning
   _BASECURSORS['pgsql']=psycopg2.extensions.cursor
 except ImportError:
   pass
 try:
   import MySQLdb
   _ALLOWED_DRIVERS['mysql']=MySQLdb
-  _ERRORS['mysql']=MySQLdb.Error
-  _WARNINGS['mysql']=MySQLdb.Warning
   import MySQLdb.cursors
   import MySQLdb.constants
   import MySQLdb.converters
@@ -70,8 +66,6 @@ try:
   import sqlite3
   _ALLOWED_DRIVERS['sqlite']=sqlite3
   _BASECURSORS['sqlite']=sqlite3.Cursor
-  _ERRORS['sqlite']=sqlite3.Error
-  _WARNINGS['sqlite']=sqlite3.Warning
 except ImportError:
   pass
 #try:
@@ -88,6 +82,8 @@ _DSNRE=re.compile(r'''(?P<exception>sqlite)://:memory:|
                      (?:(?:(?P<user>\w+?)(?::(?P<password>\w+?))?@)?  # user and password pattern
                      (?:(?P<host>[\w\.]+?)(?::(?P<port>\d+))?/|(?P<unix_socket>/\w+(?:/?\w+)*):)  # host patterns
                      (?P<dbname>\w+)|(?P<path>/\w+(?:/?\w+)*)) # database patterns''', re.I | re.L | re.X)
+_MASK_PASSWORD=re.compile(r":\w+@")
+
 
 _QUERYRE = re.compile('%\((\w+)?\)s')
 
@@ -98,7 +94,6 @@ def connect(dsn,**kwargs):
 
 
 
-try:
 class Connection(object):
 
   def __init__(self,dsn,**kwargs):
@@ -106,7 +101,7 @@ class Connection(object):
       (exception,driver,user,password,host,port,unix_socket,dbname,path) = _DSNRE.match(dsn).groups()
     except AttributeError:
       raise
-    self._dsn = dsn
+    self._dsn = _MASK_PASSWORD.sub(':%s@' % re.sub('\w','x',password),dsn) if password else dsn
     self._db_args = None
     self._db = None
     if not exception:
@@ -151,7 +146,10 @@ class Connection(object):
       raise AttributeError
 
   def __repr__(self):
-    return repr(self._db)
+    r = object.__repr__(self)
+    return '%s;dsn: %s, driver: %s,autocommit: %s, closed: %s>' % (r.rstrip('>'),self.dsn, self.driver,
+                                                                   self.autocommit,self.closed)
+    #return repr(self._db)
 
   def _ensure_connected(self):
     if (self._db is None or (time.time() - self._last_use_time > self.max_idle_time)):
@@ -243,15 +241,23 @@ class Connection(object):
   @property
   def dsn(self):
     return self._dsn
-
+  @property
+  def closed(self):
+    return False if self._db else True
   def cursor(self):
-    return self._cursor(self._db.cursor())
+    try:
+      return self._cursor(self._db.cursor())
+    except (_ALLOWED_DRIVERS[self.driver].Error,_ALLOWED_DRIVERS[self.driver].Warning), exc:
+      _reraise(exc)
 
   def close(self):
-    if getattr(self, "_db", None) is not None:
-      self._db.rollback()
-      self._db.close()
-      self._db = None
+    try:
+      if object.__getattribute__(self, "_db") is not None:
+        self._db.rollback()
+        self._db.close()
+        self._db = None
+    except AttributeError:
+      pass
 
   def reconnect(self):
     """Closes the existing database connection and re-opens it."""
@@ -296,7 +302,9 @@ class _Cursor(object):
     return self._cursor.rowcount
 
   def __repr__(self):
-    return repr(self._cursor)
+    r = object.__repr__(self)
+    return '%s;connection: %s>' % (r.rstrip('>'),repr(self.connection).strip('<>'))
+    #return repr(self._cursor)
 
   def __del__(self):
     self._del = True
@@ -306,14 +314,20 @@ class _Cursor(object):
     raise """Override that"""
 
   def execute(self,query,parameters=None):
-    if parameters:
-      self._cursor.execute(self._translate(query,parameters),parameters)
-    else:
-      self._cursor.execute(self._translate(query,parameters))
+    try:
+      if parameters:
+        self._cursor.execute(self._translate(query,parameters),parameters)
+      else:
+        self._cursor.execute(self._translate(query,parameters))
+    except (_ALLOWED_DRIVERS[self.connection.driver].Error,_ALLOWED_DRIVERS[self.connection.driver].Warning), exc:
+      _reraise(exc)
     return self
 
   def executemany(self,query,seq):
-    self.executemany(self._translate(query,seq[0]), seq)
+    try:
+      self.executemany(self._translate(query,seq[0]), seq)
+    except (_ALLOWED_DRIVERS[self.connection.driver].Error,_ALLOWED_DRIVERS[self.connection.driver].Warning), exc:
+      _reraise(exc)
     return self
 
   def executescript(self,sql):
@@ -375,9 +389,6 @@ class Row(dict):
     except KeyError:
       raise AttributeError(name)
 
-except exceptions.StandardError, exc:
-  _reraise(type(exc),exc,None)
-
 
 class ConnectionPool(object):
   """A connection pool that manages connections
@@ -397,6 +408,10 @@ class ConnectionPool(object):
 
     self._cleaner = PeriodicCallback(self._clean_pool,cleanup_timeout*1000)
     self._cleaner.start()
+  def __repr__(self):
+    r = object.__repr__(self)
+    return '%s;maxconn: %s, minconn: %s, in pool: %s, in use: %s>' % (r.rstrip('>'),self._maxcon,
+                                                                      self._mincon, self.count, len(self._in_use))
 
   def _connect(self):
     if self.count > self._maxcon:
@@ -553,12 +568,8 @@ class Pool(object):
     for pool in self._connections.itervalues():
       pool.close()
 
-class PoolError(Exception):
-  pass
-
-def _reraise(t,value,traceback):
-  exc_name = str(t).partition("'")[2].rpartition("'")[0].partition('.')[2]
-  exc = value
+def _reraise(exc):
+  exc_name = str(type(exc)).partition("'")[2].rpartition("'")[0].partition('.')[2]
   if exc_name == 'Error':
     raise Error(exc)
   elif exc_name == 'Warning':
@@ -588,6 +599,9 @@ class Error(exceptions.StandardError):
   pass
 
 class Warning(exceptions.StandardError):
+  pass
+
+class PoolError(Error):
   pass
 
 class InterfaceError(Error):
