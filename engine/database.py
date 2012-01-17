@@ -101,7 +101,8 @@ class Connection(object):
       (exception,driver,user,password,host,port,unix_socket,dbname,path) = _DSNRE.match(dsn).groups()
     except AttributeError:
       raise
-    self._dsn = _MASK_PASSWORD.sub(':%s@' % re.sub('\w','x',password),dsn) if password else dsn
+    #self._dsn = _MASK_PASSWORD.sub(':%s@' % re.sub('\w','x',password),dsn) if password else dsn
+    self._dsn = dsn
     self._db_args = None
     self._db = None
     if not exception:
@@ -147,7 +148,8 @@ class Connection(object):
 
   def __repr__(self):
     r = object.__repr__(self)
-    return '%s;dsn: %s, driver: %s,autocommit: %s, closed: %s>' % (r.rstrip('>'),self.dsn, self.driver,
+    masked_dsn = _MASK_PASSWORD.sub(':%s@' % re.sub('\w','x',self.password),self.dsn) if self.password else self.dsn
+    return '%s;dsn: %s, driver: %s,autocommit: %s, closed: %s>' % (r.rstrip('>'),masked_dsn, self.driver,
                                                                    self.autocommit,self.closed)
     #return repr(self._db)
 
@@ -331,6 +333,7 @@ class _Cursor(object):
     return self
 
   def executescript(self,sql):
+    """Wykonuje skrypt SQL w osobnej trazakcji, jezeli istniala tranzakcja to wykonuje commit"""
     self.connection.commit()
     try:
       self._cursor.execute(sql)
@@ -408,6 +411,7 @@ class ConnectionPool(object):
 
     self._cleaner = PeriodicCallback(self._clean_pool,cleanup_timeout*1000)
     self._cleaner.start()
+  
   def __repr__(self):
     r = object.__repr__(self)
     return '%s;maxconn: %s, minconn: %s, in pool: %s, in use: %s>' % (r.rstrip('>'),self._maxcon,
@@ -423,7 +427,7 @@ class ConnectionPool(object):
       con = self._connections.pop()
       con.close()
 
-  def getconn(self):
+  def get(self):
     self._connect()
     try:
       connection = self._connections.pop()
@@ -432,7 +436,7 @@ class ConnectionPool(object):
       return None
     return connection
 
-  def putconn(self,connection,close=False):
+  def put(self,connection,close=False):
     try:
       self._in_use.remove(connection)
     except ValueError:
@@ -465,18 +469,24 @@ class Pool(object):
     self.maxpools = maxpools or 30
     self.maxconn = maxconn if maxconn and maxconn >= maxpools else (maxpools*10)
     self._gets=dict()
+    self._puts=dict()
     self._previous_gets=dict()
     self._connections=dict()
     self._weight_timeout=weight_timeout
     self._weight_locked=False
+    self._weight={}
     #Periodic callbacks for cleaning and weight calculation
     if maxconn_timeout > 0:
-      self._dsn_maxcon = PeriodicCallback(self._dsn_maxcon_calculator,maxconn_timeout*1000)
-      self._maxconn.start()
+      self._dsn_maxcon_calculator_period = PeriodicCallback(self._dsn_maxcon_calculator,maxconn_timeout*1000)
+      self._dsn_maxcon_calculator_period.start()
     if weight_timeout > 0:
-      self._weight = PeriodicCallback(self._weight_calculator,weight_timeout*1000)
-      self._weight.start()
+      self._weight_calculator_period = PeriodicCallback(self._weight_calculator,weight_timeout*1000)
+      self._weight_calculator_period.start()
 
+  def __repr__(self):
+    r = object.__repr__(self)
+    return '%s;maxpools: %s,  maxconn: %s, pools: %s, in use: %s>' % (r.rstrip('>'),self.maxpools,
+                                                          self.maxconn, self.dsn_count,self.gets - self.puts)
 
   @staticmethod
   def instance(maxconn=200,**kwargs):
@@ -510,7 +520,7 @@ class Pool(object):
       calculated_max_conn_count +=con_count[dsn]
     adjustment = (.0+self.maxconn)/calculated_max_conn_count
     for (dsn,conn) in con_count.iteritems():
-      con_count[dsn]=math.floor(conn*adjustment)
+      con_count[dsn]=int(math.floor(conn*adjustment))
       self._connections[dsn].setmaxcon(con_count[dsn])
 
   def _conn_count(self,dsn):
@@ -521,7 +531,9 @@ class Pool(object):
     if self.dsn_count < self.maxpools:
       self._connections[dsn] = ConnectionPool(dsn,pool=self)
       self._gets[dsn]=0
+      self._puts[dsn]=0
       self._weight[dsn]=1
+      self._dsn_maxcon_calculator()
     else:
       raise PoolError('Pool of pools exeeded')
 
@@ -540,23 +552,32 @@ class Pool(object):
 
   @property
   def gets(self):
-    """Returns global count of getconn invocation, counted from Pool init"""
+    """Returns global count of put invocation, counted from Pool init"""
     count=0
     for dsn in self._gets.itervalues():
       count+=dsn
     return count
 
-  def getconn(self,dsn):
+  @property
+  def puts(self):
+    """Returns global count of put invocation, counted from Pool init"""
+    count=0
+    for dsn in self._puts.itervalues():
+      count+=dsn
+    return count
+
+  def get(self,dsn):
     """Gets connection from specific ConnectionPool"""
     if dsn not in self._connections.keys():
       self._createpool(dsn)
-    else:
-      raise
+    #else:
+    #  raise PoolError()
     self._gets[dsn]+=1
-    return self._connections[dsn].getconn()
+    return self._connections[dsn].get()
 
-  def putconn(self,dsn,connection,close=False):
-    self._connections[dsn].putconn(connection,close)
+  def put(self,connection,close=False):
+    self._puts[connection.dsn]+=1
+    self._connections[connection.dsn].put(connection,close)
 
   def delcon(self,dsn=None,connection=None):
     self._connections[dsn].close()

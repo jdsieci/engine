@@ -50,12 +50,29 @@ import hmac
 import hashlib
 import uuid
 from tornado.options import define, options
+from tornado.ioloop import PeriodicCallback
+import pkgutil
+
+
+
+define('sessiondsn', default=None,metavar='driver://[user[:password]@]hostname[:port]/dbname',help='DSN for database session storage')
+define('sessionexpires',default=1800,metavar='1800',help='Session validity time in seconds, default 30m')
+
+
+
+
+
 
 class _Session(dict):
   """ A Session is basically a dict with a session_id and an hmac_digest string to verify access rights """
-  def __init__(self, session_id, hmac_digest):
+  def __init__(self, session_id, hmac_digest,expires = 0):
     self.session_id = session_id
     self.hmac_digest = hmac_digest
+    self.expires = expires
+  
+  def __repr__(self):
+    r = object.__repr__(self)
+    return '%s;session_id: %s, hmac_digest: %s>' % (r.rstrip('>'),self.session_id,self.hmac_digest)
 
 
 
@@ -78,8 +95,20 @@ class BaseSessionStorage(object):
     It must retrun _Session object
     """
     raise InvalidSessionException('Need to be implemented')
+  
+  def delete(self,session_id,hmac_digest):
+    """Deletes session from storage.Needs to be implemented in child class.
+    It must retrun _Session object
+    """
+    raise InvalidSessionException('Need to be implemented')
 
-  def _generate_session(self,session_id=None,hamac_digest=None):
+  def expired(self):
+    """Cleans up expired sessions from storage.Needs to be implemented in child class.
+    It must retrun _Session object
+    """
+    raise InvalidSessionException('Need to be implemented')
+
+  def _generate_session(self,session_id=None,hmac_digest=None):
     if session_id == None:
       session_should_exist = False
       session_id = self._generate_uid()
@@ -91,6 +120,9 @@ class BaseSessionStorage(object):
 
     # make sure the HMAC digest we generate matches the given one, to validate
     expected_hmac_digest = self._get_hmac_digest(session_id)
+
+    if hmac_digest != expected_hmac_digest:
+      raise InvalidSessionException('Wrong hmac_digest')
     return (session_should_exist, expected_hmac_digest, session_id, hmac_digest)
 
   def _get_hmac_digest(self, session_id):
@@ -124,25 +156,11 @@ class DirectorySessionStorage(BaseSessionStorage):
     except IOError:
       return {}
 
-  def get(self, session_id = None, hmac_digest = None):
-    # set up the session state (create it from scratch, or from parameters
-    #if session_id == None:
-    #  session_should_exist = False
-    #  session_id = self._generate_uid()
-    #  hmac_digest = self._get_hmac_digest(session_id)
-    #else:
-    #  session_should_exist = True
-    #  session_id = session_id
-    #  hmac_digest = hmac_digest   # keyed-Hash Message Authentication Code
+  def get(self, session_id = None, hmac_digest = None, expires = options.sessionexpires):
 
-    # make sure the HMAC digest we generate matches the given one, to validate
-    #expected_hmac_digest = self._get_hmac_digest(session_id)
     (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
-    if hmac_digest != expected_hmac_digest:
-      raise InvalidSessionException()
-
     # create the session object
-    session = _Session(session_id, hmac_digest)
+    session = _Session(session_id, hmac_digest,expires)
 
     # read the session file, if this is a pre-existing session
     if session_should_exist:
@@ -160,6 +178,12 @@ class DirectorySessionStorage(BaseSessionStorage):
     session_file = open(session_path, 'wb')
     pickle.dump(dict(session.items()), session_file)
     session_file.close()
+    
+  def delete(self,session_id,hmac_digest):
+    pass
+  
+  def expired(self):
+    pass
 
 import database
 class DatabaseSessionStorage(BaseSessionStorage):
@@ -167,39 +191,83 @@ class DatabaseSessionStorage(BaseSessionStorage):
   def __init__(self,pool,**kwargs):
     super(DatabaseSessionStorage,self).__init__(**kwargs)
     self.pool = pool
-    self.connection = self.pool.get(self.dsn)
+    self.connection = self.pool.get(options.sessiondsn)
     self._create_tables()
 
   def _create_tables(self):
+    script = pkgutil.get_data(__name__,'session/%s.sql' % self.connection.driver)
     cursor = self.connection.cursor()
-    cursor.executescript()
+    cursor.executescript(script)
 
   def _read(self, session_id):
-    cursor = self.connection.execute('SELECT * FROM session WHERE session_id=%s',session_id)
+    cursor = self.connection.execute('SELECT * FROM session WHERE session_id=%s',(session_id,))
     try :
       data = pickle.loads(cursor.fetchone().content)
       if type(data) == type({}):
         return data
       else:
         return {}
-    except IOError:
+    except AttributeError:
       return {}
+    finally:
+      self.connection.commit()
 
-  def get(self,session_id=None,hmac_digest=None):
+  def get(self,session_id=None,hmac_digest=None, expires = options.sessionexpires):
     (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
-    session = _Session(session_id, hmac_digest)
+
+    session = _Session(session_id, hmac_digest,expires)
     if session_should_exist:
       data = self._read(session_id)
       for i, j in data.iteritems():
         session[i] = j
     return session
-
   def set(self,session):
     pickled = pickle.dumps(dict(session.items()))
     try:
-      self.connection.execute('INSERT INTO session VALUES(%(session_id)s,%(content)s)',{'session_id': session.session_id, 'content': pickled})
-    except database.IntegrityError:
-      self.connection.execute('UPDATE session SET content = %(content)s WHERE session_id = %(session_id)s',{'session_id': session.session_id, 'content': pickled})
+      try:
+        self.connection.execute('''INSERT INTO session
+         VALUES(%(session_id)s,NOW() + '%(expires)s',%(content)s)''',{'session_id': session.session_id,
+                                                                   'expires': options.sessionexpires,
+                                                                   'content': pickled})
+      except database.IntegrityError:
+        self.connection.execute('''UPDATE session SET content = %(content)s,
+         expires = NOW() + '%(expires)s' 
+         WHERE session_id = %(session_id)s''',{'session_id': session.session_id,
+                                               'expires': options.sessionexpires,
+                                               'content': pickled})
+    except database.Error, e:
+      print e
+      self.connection.rollback()
+    else:
+      self.connection.commit()
+  
+  def delete(self,session_id,hmac_digest):
+    (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
+    if hmac_digest != expected_hmac_digest:
+      raise InvalidSessionException()
+    try:
+      self.connection.execute('DELETE FROM session WHERE session_id = %s)',(session_id,))
+    except database.Error, e:
+      self.connection.rollback()
+    else:
+      self.connection.commit()
+  
+  def expired(self):
+    """Cleans up expired sessions"""
+    try:
+      cursor = self.connection.execute('DELETE FROM session WHERE expires < NOW()')
+      return cursor.rowcount
+    except database.Error, e:
+      self.connection.rollback()
+    else:
+      self.connection.commit()
+  
+  def close(self):
+    self.connection.commit()
+    self.pool.put(self.connection)
+    self.connection=None
+    self.pool=None
+    
 
 #TODO: zaimplementowac memcache
 try:
@@ -235,6 +303,15 @@ class SessionManager(object):
   """ A SessionManager is specifically for use in Tornado, using Tornado's cookies """
   def __init__(self,sessionstorage,**kwargs):
     self.sessionstorage=sessionstorage(**kwargs)
+    self._cleaner = PeriodicCallback(self._cleanup,options.sessionexpires*1000)
+    self._cleaner.start()
+
+  def _cleanup(self):
+    self._expired()
+  
+  def _expired(self):
+    self.sessionstorage.expired()
+    
 
   def get(self, requestHandler = None):
     if requestHandler == None:
