@@ -418,7 +418,7 @@ class ConnectionPool(object):
                                                                       self._mincon, self.count, len(self._in_use))
 
   def _connect(self):
-    if self.count > self._maxcon:
+    if self.count + 1 > self._maxcon:
       raise PoolError('connection pool exausted')
     self._connections.append(Connection(self._dsn))
 
@@ -428,12 +428,14 @@ class ConnectionPool(object):
       con.close()
 
   def get(self):
-    self._connect()
+    #self._connect()
     try:
       connection = self._connections.pop()
       self._in_use.append(connection)
     except IndexError:
-      return None
+      self._connect()
+      connection = self._connections.pop()
+      self._in_use.append(connection)
     return connection
 
   def put(self,connection,close=False):
@@ -443,12 +445,19 @@ class ConnectionPool(object):
       pass
     if close or (self.count + 1 > self.maxcon):
       connection.close()
+      del connection
     else:
       self._connections.append(connection)
 
   @property
   def count(self):
     return len(self._connections) + len(self._in_use)
+  @property
+  def in_use(self):
+    return len(self._in_use)
+  @property
+  def available(self):
+    return len(self._connections)
   @property
   def maxcon(self):
     return self._maxcon
