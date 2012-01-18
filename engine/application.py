@@ -24,47 +24,49 @@ class Application(engine.application.BaseApplication):
     super(Application,self).__init__(handlers,**settings)
 '''
 import tornado.web
-from tornado.options import define,options
+from tornado.options import define, options
 import session
 import database
 import os
 #build-in options
-define('sessionsecret',default=None,help='Session secret password')
-define('cookiesecret',default='u_must_change_it')
-define('debug',default=False,type=bool)
-define('port',default=8888,type=int)
-define('address',default='')
+define('sessionsecret', default=None, help='Session secret password')
+define('cookiesecret', default='u_must_change_it')
+define('debug', default=False, type=bool)
+define('port', default=8888, type=int)
+define('address', default='')
+
 
 class SimpleApplication(tornado.web.Application):
   """Equivalent to tornado.web.Application, for clean inheritance"""
-  def __init__(self,handlers, **settings):
-    self.name=self.__class__.__name__.lower()
-    super(SimpleApplication,self).__init__(handlers, **settings)
-    
+  def __init__(self, handlers, **settings):
+    self.name = self.__class__.__name__.lower()
+    super(SimpleApplication, self).__init__(handlers, **settings)
+
 
 class BaseApplication(SimpleApplication):
   '''BaseApplication tornado.web.Application with DirectorySessionStorage'''
   settings = None
   #name = 'baseapp'
-  def __init__(self,handlers,**settings):
+
+  def __init__(self, handlers, **settings):
     settings['session_secret'] = options.sessionsecret
     settings['cookie_secret'] = options.cookiesecret
-    self.session_manager = session.SessionManager(session.DirectorySessionStorage,session_dir='/tmp/tornado-session',secret=options.sessionsecret)
-    super(BaseApplication,self).__init__(handlers, **settings)
-  
+    self.session_manager = session.SessionManager(session.DirectorySessionStorage, session_dir='/tmp/tornado-session', secret=options.sessionsecret)
+    super(BaseApplication, self).__init__(handlers, **settings)
+
 
 class DatabaseApplication(SimpleApplication):
   """Application with database engine handling
   Not Fully Implemented Yet!
   """
-  def __init__(self,handlers,**settings):
-    define('poolsize',default=10,type=int)
+  def __init__(self, handlers, **settings):
+    define('poolsize', default=10, type=int)
     settings['session_secret'] = options.sessionsecret
     settings['cookie_secret'] = options.cookiesecret
     self.pool = database.Pool.instance()
-    self.session_manager = session.SessionManager(session.DatabaseSessionStorage,self.pool,secret=options.sessionsecret)
-    super(BaseApplication,self).__init__(handlers, **settings)
+    self.session_manager = session.SessionManager(session.DatabaseSessionStorage, self.pool, secret=options.sessionsecret)
+    super(BaseApplication, self).__init__(handlers, **settings)
 
-  def db(self,dsn):
+  def db(self, dsn):
     """returns database pool instance"""
     return self.pool.getconn(dsn)

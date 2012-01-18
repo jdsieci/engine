@@ -21,7 +21,7 @@ Usage:
 In your application script,
     settings["session_secret"] = 'some secret password!!'
     settings["session_dir"] = 'sessions'  # the directory to store sessions in
-    application.session_manager = session.SessionManager(session.DirectorySessionStorage,settings["session_secret"], settings["session_dir"])
+    application.session_manager = session.SessionManager(session.DirectorySessionStorage, settings["session_secret"], settings["session_dir"])
 
 In your RequestHandler (probably in __init__),
     self.session = session.Session(self.application.session_manager, self)
@@ -44,7 +44,7 @@ the basic session mechanism is this:
 '''
 
 #import pickle
-import cPickle as pickle #poprawka wydajnosci
+import cPickle as pickle  # poprawka wydajnosci
 import os.path
 import hmac
 import hashlib
@@ -55,69 +55,67 @@ import pkgutil
 import time
 
 
-
-define('session_dsn', default=None,metavar='driver://[user[:password]@]hostname[:port]/dbname',help='DSN for database session storage')
-define('session_lifetime',default=1800,metavar='1800',help='Session life time in seconds, default 30m')
-
-
-
+define('session_dsn', default=None, metavar='driver://[user[:password]@]hostname[:port]/dbname',
+       help='DSN for database session storage')
+define('session_lifetime', default=1800, metavar='1800',
+       help='Session life time in seconds, default 30m')
 
 
 class _Session(dict):
   """ A Session is basically a dict with a session_id and an hmac_digest string to verify access rights """
-  def __init__(self, session_id, hmac_digest,lifetime = 0,storage = None):
+  def __init__(self, session_id, hmac_digest, lifetime=0, storage=None):
     self.session_id = session_id
     self.hmac_digest = hmac_digest
     self.lifetime = lifetime
     self.storage = storage
     self.closed = False
-  
+
   def __repr__(self):
     r = object.__repr__(self)
-    return '%s;session_id: %s, hmac_digest: %s,closed: %s, items: %s>' % (r.rstrip('>'),self.session_id,self.hmac_digest,self.closed,dict.__repr__(self))
-  
-  def __getitem__(self,key):
-    self._is_closed()
-    if self.storage is not None:
-      self.update(self.storage.get(self.session_id,self.hmac_digest,self.lifetime))
-    return dict.__getitem__(self,key)
-  
-  def __setitem__(self,key,value):
-    self._is_closed()
-    if self.storage is not None:
-      self.update(self.storage.get(self.session_id,self.hmac_digest,self.lifetime))
-      dict.__setitem__(self,key,value)
-      self.storage.set(self)
-    else:
-      dict.__setitem__(self,key,value)
-      
-  def __delitem__(self,key):
-    self._is_closed()
-    if self.storage is not None:
-      self.update(self.storage.get(self.session_id,self.hmac_digest,self.lifetime))
-      dict.__delitem__(self,key)
-      self.storage.set(self)
-    else:
-      dict.__delitem__(self,key)
+    return '%s;session_id: %s, hmac_digest: %s, closed: %s, items: %s>' % (r.rstrip('>'), self.session_id, self.hmac_digest, self.closed, dict.__repr__(self))
 
-  def __getattr__(self,name):
+  def __getitem__(self, key):
+    self._is_closed()
+    if self.storage is not None:
+      self.update(self.storage.get(self.session_id, self.hmac_digest, self.lifetime))
+    return dict.__getitem__(self, key)
+
+  def __setitem__(self, key, value):
+    self._is_closed()
+    if self.storage is not None:
+      self.update(self.storage.get(self.session_id, self.hmac_digest, self.lifetime))
+      dict.__setitem__(self, key, value)
+      self.storage.set(self)
+    else:
+      dict.__setitem__(self, key, value)
+
+  def __delitem__(self, key):
+    self._is_closed()
+    if self.storage is not None:
+      self.update(self.storage.get(self.session_id, self.hmac_digest, self.lifetime))
+      dict.__delitem__(self, key)
+      self.storage.set(self)
+    else:
+      dict.__delitem__(self, key)
+
+  def __getattr__(self, name):
     try:
       return self[name]
     except KeyError:
       raise AttributeError(name)
-  
+
   def _is_closed(self):
     if self.closed:
       raise InvalidSessionException('Session closed')
 
   def sync(self):
-    self.update(self.storage.get(self.session_id,self.hmac_digest,self.lifetime))
+    self.update(self.storage.get(self.session_id, self.hmac_digest, self.lifetime))
     self.storage.set(self)
 
   def close(self):
     self.storage = None
     self.closed = True
-  
+
   def __del__(self):
     if not self.closed:
       self.close()
@@ -128,7 +126,7 @@ class BaseSessionStorage(object):
   def __init__(self, secret):
     self.secret = secret
 
-  def get(self, session_id = None, hmac_digest = None):
+  def get(self, session_id=None, hmac_digest=None):
     """Gets session from strage. Needs to be implemented in child class.
     Keyword arguments:
     session_id -- session identyfier
@@ -142,8 +140,8 @@ class BaseSessionStorage(object):
     It must retrun _Session object
     """
     raise InvalidSessionException('Need to be implemented')
-  
-  def delete(self,session):
+
+  def delete(self, session):
     """Deletes session from storage.Needs to be implemented in child class.
     It must retrun _Session object
     """
@@ -155,7 +153,7 @@ class BaseSessionStorage(object):
     """
     raise InvalidSessionException('Need to be implemented')
 
-  def _generate_session(self,session_id=None,hmac_digest=None):
+  def _generate_session(self, session_id=None, hmac_digest=None):
     if session_id == None:
       session_should_exist = False
       session_id = self._generate_uid()
@@ -176,25 +174,23 @@ class BaseSessionStorage(object):
     return hmac.new(session_id, self.secret, hashlib.sha1).hexdigest()
 
   def _generate_uid(self):
-    base = hashlib.md5( self.secret + str(uuid.uuid4()) )
+    base = hashlib.md5(self.secret + str(uuid.uuid4()))
     return base.hexdigest()
-
 
 
 class DirectorySessionStorage(BaseSessionStorage):
   """ DirectorySessionStorage handles the cookie and file read/writes for a Session """
-  def __init__(self, session_dir = '', **kwargs):
-    super(DirectorySessionStorage,self).__init__(**kwargs)
+  def __init__(self, session_dir='', **kwargs):
+    super(DirectorySessionStorage, self).__init__(**kwargs)
 
     # figure out where to store the session file
     if session_dir == '':
       session_dir = os.path.join(os.path.dirname(__file__), 'sessions')
     self.session_dir = session_dir
 
-
   def _read(self, session_id):
     session_path = self._get_session_path(session_id)
-    try :
+    try:
       data = pickle.load(open(session_path))
       if type(data) == type({}):
         return data
@@ -203,11 +199,11 @@ class DirectorySessionStorage(BaseSessionStorage):
     except IOError:
       return {}
 
-  def get(self, session_id = None, hmac_digest = None, lifetime = options.session_lifetime):
+  def get(self, session_id=None, hmac_digest=None, lifetime=options.session_lifetime):
 
     (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
     # create the session object
-    session = _Session(session_id, hmac_digest,lifetime)
+    session = _Session(session_id, hmac_digest, lifetime)
 
     # read the session file, if this is a pre-existing session
     if session_should_exist:
@@ -225,34 +221,37 @@ class DirectorySessionStorage(BaseSessionStorage):
     session_file = open(session_path, 'wb')
     pickle.dump(dict(session.items()), session_file)
     session_file.close()
-    
-  def delete(self,session):
+
+  def delete(self, session):
     session_path = self._get_session_path(session.session_id)
     os.remove(session_path)
-  
+
   def expired(self):
     for session_id in os.listdir(self.session_dir):
       session_path = self._get_session_path(session_id)
-      if os.stat(session_path).st_mtime < time.time()+options.session_lifetime:
+      if os.stat(session_path).st_mtime < time.time() + options.session_lifetime:
         os.remove(session_path)
 
+
 import database
+
+
 class DatabaseSessionStorage(BaseSessionStorage):
   """SessionStorage using database"""
-  def __init__(self,pool,**kwargs):
-    super(DatabaseSessionStorage,self).__init__(**kwargs)
+  def __init__(self, pool, **kwargs):
+    super(DatabaseSessionStorage, self).__init__(**kwargs)
     self.pool = pool
     self.connection = self.pool.get(options.session_dsn)
     self._create_tables()
 
   def _create_tables(self):
-    script = pkgutil.get_data(__name__,'session/%s.sql' % self.connection.driver)
+    script = pkgutil.get_data(__name__, 'session/%s.sql' % self.connection.driver)
     cursor = self.connection.cursor()
     cursor.executescript(script)
 
-  def _read(self, session_id,lifetime):
-    cursor = self.connection.execute("SELECT * FROM session WHERE session_id=%s AND expires > NOW() + '%s'",(session_id,lifetime))
-    try :
+  def _read(self, session_id, lifetime):
+    cursor = self.connection.execute("SELECT * FROM session WHERE session_id=%s AND expires > NOW() + '%s'", (session_id, lifetime))
+    try:
       data = pickle.loads(cursor.fetchone().content)
       if type(data) == type({}):
         return data
@@ -263,45 +262,46 @@ class DatabaseSessionStorage(BaseSessionStorage):
     finally:
       self.connection.commit()
 
-  def get(self,session_id=None,hmac_digest=None, lifetime = options.session_lifetime):
+  def get(self, session_id=None, hmac_digest=None, lifetime=options.session_lifetime):
     (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
 
-    session = _Session(session_id, hmac_digest,lifetime,self)
+    session = _Session(session_id, hmac_digest, lifetime, self)
     if session_should_exist:
-      data = self._read(session_id,lifetime)
+      data = self._read(session_id, lifetime)
       for i, j in data.iteritems():
         session[i] = j
     return session
-  def set(self,session):
+
+  def set(self, session):
     pickled = pickle.dumps(dict(session.items()))
     try:
       try:
         self.connection.execute('''INSERT INTO session
-         VALUES(%(session_id)s,NOW() + '%(lifetime)s',%(content)s)''',{'session_id': session.session_id,
+         VALUES(%(session_id)s, NOW() + '%(lifetime)s',%(content)s)''', {'session_id': session.session_id,
                                                                    'lifetime': session.lifetime,
-                                                                   'content': pickled})
+                                                                   'content': pickled}).close()
       except database.IntegrityError:
         self.connection.execute('''UPDATE session SET content = %(content)s,
-         expires = NOW() + '%(lifetime)s' 
-         WHERE session_id = %(session_id)s''',{'session_id': session.session_id,
+         expires = NOW() + '%(lifetime)s'
+         WHERE session_id = %(session_id)s''', {'session_id': session.session_id,
                                                'lifetime': session.lifetime,
-                                               'content': pickled})
+                                               'content': pickled}).close()
     except database.Error, e:
       print e
       self.connection.rollback()
     else:
       self.connection.commit()
-  
-  def delete(self,session):
+
+  def delete(self, session):
     session.close()
     try:
-      self.connection.execute('DELETE FROM session WHERE session_id = %s',(session.session_id,))
+      self.connection.execute('DELETE FROM session WHERE session_id = %s', (session.session_id,)).close()
     except database.Error, e:
       print e
       self.connection.rollback()
     else:
       self.connection.commit()
-  
+
   def expired(self):
     """Cleans up expired sessions"""
     try:
@@ -311,28 +311,30 @@ class DatabaseSessionStorage(BaseSessionStorage):
       self.connection.rollback()
     else:
       self.connection.commit()
-  
+    finally:
+      cursor.close()
+
   def close(self):
     self.connection.commit()
     self.pool.put(self.connection)
-    self.connection=None
-    self.pool=None
-    
+    self.connection = None
+    self.pool = None
+
 
 #TODO: zaimplementowac memcache
 try:
   import memcache
 
   class MemcacheSessionStorage(BaseSessionStorage):
-    def __init__(self, session_dir = '', **kwargs):
-      super(DirectorySessionStorage,self).__init__(**kwargs)
+    def __init__(self, session_dir='', **kwargs):
+      super(DirectorySessionStorage, self).__init__(**kwargs)
 
-    def get(self, session_id = None, hmac_digest = None, lifetime = options.session_lifetime):
+    def get(self, session_id=None, hmac_digest=None, lifetime=options.session_lifetime):
 
       (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
 
       # create the session object
-      session = _Session(session_id, hmac_digest,lifetime,self)
+      session = _Session(session_id, hmac_digest, lifetime, self)
 
       # read the session file, if this is a pre-existing session
       if session_should_exist:
@@ -347,21 +349,21 @@ try:
 except ImportError:
   pass
 
+
 class SessionManager(object):
   """ A SessionManager is specifically for use in Tornado, using Tornado's cookies """
-  def __init__(self,sessionstorage,**kwargs):
-    self.sessionstorage=sessionstorage(**kwargs)
-    self._cleaner = PeriodicCallback(self._cleanup,options.session_lifetime*500)
+  def __init__(self, sessionstorage, **kwargs):
+    self.sessionstorage = sessionstorage(**kwargs)
+    self._cleaner = PeriodicCallback(self._cleanup, options.session_lifetime * 500)
     self._cleaner.start()
 
   def _cleanup(self):
     self._expired()
-  
+
   def _expired(self):
     self.sessionstorage.expired()
-    
 
-  def get(self, requestHandler = None):
+  def get(self, requestHandler=None):
     if requestHandler == None:
       return self.sessionstorage.get()
     else:
@@ -369,17 +371,17 @@ class SessionManager(object):
       hmac_digest = requestHandler.get_secure_cookie("hmac_digest")
       return self.sessionstorage.get(session_id, hmac_digest)
 
-
   def set(self, requestHandler, session):
     requestHandler.set_secure_cookie("session_id", session.session_id)
     requestHandler.set_secure_cookie("hmac_digest", session.hmac_digest)
     return self.sessionstorage.set(session)
-  
-  def delete(self,requestHandler,session):
+
+  def delete(self, requestHandler, session):
     requestHandler.clear_cookie('session_id')
     requestHandler.clear_cookie('hmac_digest')
     return self.sessionstorage.delete(session)
     del session
+
 
 class Session(_Session):
   """ A TornadoSession is a Session object for use in Tornado """
@@ -397,20 +399,21 @@ class Session(_Session):
     self.session_id = plain_session.session_id
     self.hmac_digest = plain_session.hmac_digest
     self.lifetime = plain_session.lifetime
-  
+
   def save(self):
     self.session_manager.set(self.request_handler, self)
     self.close()
-  
+
   def delete(self):
     request_handler = self.request_handler
     self.close()
     self.session_manager.delete(request_handler, self)
-  
+
   def close(self):
     self.session_manager = None
     self.request_handler = None
-    super(_Session,self).close()
-    
+    super(_Session, self).close()
+
+
 class InvalidSessionException(Exception):
   pass

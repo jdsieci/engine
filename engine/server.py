@@ -21,6 +21,7 @@ httpserver - tymczasowo przykrywa torando.httpserver
 
 from tornado import httpserver as tornado
 
+
 class HTTPServer(tornado.HTTPServer):
   """Dummy class. Doing nothing"""
   pass
