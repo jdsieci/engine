@@ -42,8 +42,8 @@ setup(name="engine",
       package_dir = {'engine':'engine'},
       package_data = {'engine':['session/*.sql']},
       packages = ['engine'],
-      requires = ['tornado (>=2.1.1)','daemon','setproctitle'],
-      install_requires = ['tornado>=2.1.1','daemon','setproctitle'],
+      requires = ['tornado (>=2.1.1)', 'daemon', 'setproctitle'],
+      install_requires = ['tornado>=2.1.1', 'daemon', 'setproctitle'],
       scripts = [],
       **kwargs
      )

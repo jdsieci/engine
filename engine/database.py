@@ -73,17 +73,24 @@ except ImportError:
 #except ImportError:
 #  pass
 
+if not len(_ALLOWED_DRIVERS):
+  raise ImportError('No drivers Avalable')
+
 
 #Internal CONSTANTS
-_DSNRE = re.compile(r'''(?P<exception>sqlite)://:memory:|
-                     (?P<driver>\w+?)://  # driver
+_DSNRE = re.compile(r'''^(?P<exception>sqlite)://:memory:$|
+                     ^(?P<driver>\w+?)://  # driver
                      (?:(?:(?P<user>\w+?)(?::(?P<password>\w+?))?@)?  # user and password pattern
-                     (?:(?P<host>[\w\.]+?)(?::(?P<port>\d+))?/|(?P<unix_socket>/\w+(?:/?\w+)*):)  # host patterns
-                     (?P<dbname>\w+)|(?P<path>/\w+(?:/?\w+)*)) # database patterns''', re.I | re.L | re.X)
+                     (?:(?P<host>[\w\.]+?)(?::(?P<port>\d+))?/|(?P<unix_socket>/(?:\.?\w+?(?:[\.\-]\w+)*/)*?\.?\w+(?:[\.\-]\w+)*):)  # host patterns
+                     (?P<dbname>\w+)|(?P<path>/(?:\.?\w+?(?:[\.\-]\w+)*/)*?\.?\w+(?:[\.\-]\w+)*))$ # database patterns''', re.I | re.L | re.X | re.U)
 _MASK_PASSWORD = re.compile(r":\w+@")
 
 
 _QUERYRE = re.compile('%\((\w+)?\)s')
+
+
+def usableDrivers():
+  return tuple(_ALLOWED_DRIVERS.keys())
 
 
 def connect(dsn, **kwargs):
@@ -96,18 +103,18 @@ class Connection(object):
     try:
       (exception, driver, user, password, host, port, unix_socket, dbname, path) = _DSNRE.match(dsn).groups()
     except AttributeError:
-      raise
+      raise InterfaceError('Wrong dsn format')
     #self._dsn = _MASK_PASSWORD.sub(':%s@' % re.sub('\w','x',password),dsn) if password else dsn
     self._dsn = dsn
     self._db_args = None
     self._db = None
+    self.password = password
     if not exception:
       self.host = host
       self.port = port
       self.unix_socket = unix_socket
       self.path = path
       self.database = dbname
-      self.password = password
       self.user = user
     elif exception == 'sqlite':
       driver = exception
@@ -130,13 +137,14 @@ class Connection(object):
       connect = True
 
     self._last_use_time = time.time()
-
     if driver.lower() in _ALLOWED_DRIVERS.keys():
       self.driver = driver.lower()
       self._basecursor = _BASECURSORS[driver]
       self._cursor = self._cursor_factory()
       if connect:
         self.reconnect()
+    else:
+      raise InterfaceError('Driver %s not installed/supported' % driver.lower())
 
   def __del__(self):
     self.close()
@@ -150,7 +158,7 @@ class Connection(object):
   def __repr__(self):
     r = object.__repr__(self)
     masked_dsn = _MASK_PASSWORD.sub(':%s@' % re.sub('\w', 'x', self.password), self.dsn) if self.password else self.dsn
-    return '%s;dsn: %s, driver: %s,autocommit: %s, closed: %s>' % (r.rstrip('>'), masked_dsn, self.driver,
+    return '%s;dsn: %s, driver: %s, autocommit: %s, closed: %s>' % (r.rstrip('>'), masked_dsn, self.driver,
                                                                    self.autocommit, self.closed)
     #return repr(self._db)
 
@@ -225,16 +233,24 @@ class Connection(object):
   def _cursor_factory(self):
     if self.driver == 'sqlite':
       class Cursor(_Cursor):
-        connection = self
-
+       
         def _translate(self, query, params):
           if type(params) is dict:
             return _QUERYRE.sub(r':\1', query)
           else:
             return query.replace('%s', '?')
+        
+        def executescript(self, sql):
+          try:
+            self._cursor.executescript(sql)
+          except:
+            self.connection.rollback()
+          else:
+            self.connection.commit()
+          return self
+          
     else:
       class Cursor(_Cursor):
-        connection = self
 
         def _translate(self, query, params):
           return query
@@ -254,7 +270,7 @@ class Connection(object):
 
   def cursor(self):
     try:
-      return self._cursor(self._db.cursor())
+      return self._cursor(self._db.cursor(), self)
     except (_ALLOWED_DRIVERS[self.driver].Error, _ALLOWED_DRIVERS[self.driver].Warning), exc:
       _reraise(exc)
 
@@ -293,9 +309,10 @@ class Connection(object):
 class _Cursor(object):
   """Cursor wrapper class.
   """
-  def __init__(self, cursor):
+  def __init__(self, cursor, connection):
     self._cursor = cursor
-    self._del = False
+    self.closed = False
+    self.connection = connection
 
   def __getattr__(self, attr):
     if self._cursor is not None:
@@ -311,12 +328,12 @@ class _Cursor(object):
 
   def __repr__(self):
     r = object.__repr__(self)
-    return '%s;connection: %s>' % (r.rstrip('>'), repr(self.connection).strip('<>'))
+    return '%s;connection: %s>' % (r.rstrip('>'), repr(self.connection))
     #return repr(self._cursor)
 
   def __del__(self):
-    self._del = True
-    self.close()
+    if not self.closed:
+      self.close()
 
   def _translate(self, query, params):
     raise """Override that"""
@@ -339,7 +356,7 @@ class _Cursor(object):
     return self
 
   def executescript(self, sql):
-    """Wykonuje skrypt SQL w osobnej trazakcji, jezeli istniala tranzakcja to wykonuje commit"""
+    """Wykonuje skrypt SQL w osobnej transakcji, jezeli istniala tranzakcja to wykonuje commit"""
     self.connection.commit()
     try:
       self._cursor.execute(sql)
@@ -380,14 +397,12 @@ class _Cursor(object):
 
   def close(self):
     if getattr(self, "_cursor", None) is not None:
-      if self._del:
-        try:
-          self._cursor.close()
-        except:
-          pass
-      else:
+      try:
         self._cursor.close()
+      except:
+        pass
       self._cursor = None
+    self.closed = True
 
 
 class Row(dict):
@@ -409,6 +424,7 @@ class ConnectionPool(object):
     self._pool = pool
     self._connections = []
     self._in_use = []
+    self.closed = False
     for i in range(mincon):
       self._connect()
     #Optional params
@@ -428,7 +444,8 @@ class ConnectionPool(object):
   def _connect(self):
     if self.count + 1 > self._maxcon:
       raise PoolError('connection pool exausted')
-    self._connections.append(Connection(self._dsn))
+    if not self.closed:
+      self._connections.append(Connection(self._dsn))
 
   def _clean_pool(self):
     while self._connections:
@@ -436,7 +453,8 @@ class ConnectionPool(object):
       con.close()
 
   def get(self):
-    #self._connect()
+    if self.closed:
+      raise PoolError("Nobody's home, come later")
     try:
       connection = self._connections.pop()
       self._in_use.append(connection)
@@ -447,16 +465,17 @@ class ConnectionPool(object):
     return connection
 
   def put(self, connection, close=False):
+    if self.closed:
+      raise PoolError("Nobody's home, come later")
     try:
       self._in_use.remove(connection)
     except ValueError:
-      pass
+      raise PoolError('Connection is available. Debt already paid')
     if close or (self.count + 1 > self.maxcon):
       connection.close()
-      del connection
     else:
       self._connections.append(connection)
-
+  
   @property
   def count(self):
     return len(self._connections) + len(self._in_use)
@@ -478,6 +497,23 @@ class ConnectionPool(object):
       self._maxcon = maxcon
     else:
       raise ValueError
+    
+  def close(self):
+    while len(self._connections):
+      con = self._connections.pop()
+      con.close()
+      del con
+    while len(self._in_use):
+      con = self._in_use.pop()
+      con.close()
+      del con
+    self._cleaner.stop()
+    self._pool = None
+    self.closed = True
+      
+  def __del__(self):
+    if not self.closed:
+      self.close()
 
 
 class Pool(object):
@@ -496,6 +532,7 @@ class Pool(object):
     self._weight_timeout = weight_timeout
     self._weight_locked = False
     self._weight = dict()
+    self.closed = False
     #Periodic callbacks for cleaning and weight calculation
     if maxconn_timeout > 0:
       self._dsn_maxcon_calculator_period = PeriodicCallback(self._dsn_maxcon_calculator, maxconn_timeout * 1000)
@@ -589,6 +626,8 @@ class Pool(object):
 
   def get(self, dsn):
     """Gets connection from specific ConnectionPool"""
+    if self.closed:
+      raise PoolError("Nobody's home, come later")
     if dsn not in self._connections.keys():
       self._createpool(dsn)
     #else:
@@ -597,18 +636,32 @@ class Pool(object):
     return self._connections[dsn].get()
 
   def put(self, connection, close=False):
+    if self.closed:
+      raise PoolError("Nobody's home, come later")
     self._puts[connection.dsn] += 1
     self._connections[connection.dsn].put(connection, close)
 
-  def delcon(self, dsn=None, connection=None):
+  def delete(self, dsn=None, connection=None):
     self._connections[dsn].close()
     del self._connections[dsn]
     del self._weight[dsn]
     del self._gets[dsn]
 
-  def closeall(self):
-    for pool in self._connections.itervalues():
-      pool.close()
+  def reset(self):
+    for dsn in self._connections.keys():
+      self.delete(dsn)
+    self.closed = False
+    
+  def close(self):
+    for dsn in self._connections.keys():
+      self.delete(dsn)
+    self._dsn_maxcon_calculator_period.stop()
+    self._weight_calculator_period.stop()
+    self.closed = True
+
+  def __del__(self):
+    if not self.closed:
+      self.close()
 
 
 def _reraise(exc):

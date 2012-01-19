@@ -20,6 +20,7 @@ import ssl
 
 version = '0.1.0'
 version_info = (0, 1, 0)
+__version__ = version_info
 
 __all__ = ['application', 'runner', 'server', 'session', 'database']
 

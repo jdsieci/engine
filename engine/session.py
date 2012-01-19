@@ -55,8 +55,6 @@ import pkgutil
 import time
 
 
-define('session_dsn', default=None, metavar='driver://[user[:password]@]hostname[:port]/dbname',
-       help='DSN for database session storage')
 define('session_lifetime', default=1800, metavar='1800',
        help='Session life time in seconds, default 30m')
 
@@ -125,6 +123,7 @@ class BaseSessionStorage(object):
   """Dummy sessionstorage. All session storages have to inherit from that class"""
   def __init__(self, secret):
     self.secret = secret
+    self.closed = False
 
   def get(self, session_id=None, hmac_digest=None):
     """Gets session from strage. Needs to be implemented in child class.
@@ -176,7 +175,15 @@ class BaseSessionStorage(object):
   def _generate_uid(self):
     base = hashlib.md5(self.secret + str(uuid.uuid4()))
     return base.hexdigest()
-
+  
+  def close(self):
+    """Cleanup all object references"""
+    self.closed = True
+  
+  def __del__(self):
+    if not self.closed:
+      self.close()
+ 
 
 class DirectorySessionStorage(BaseSessionStorage):
   """ DirectorySessionStorage handles the cookie and file read/writes for a Session """
@@ -231,95 +238,103 @@ class DirectorySessionStorage(BaseSessionStorage):
       session_path = self._get_session_path(session_id)
       if os.stat(session_path).st_mtime < time.time() + options.session_lifetime:
         os.remove(session_path)
-
-
-import database
-
-
-class DatabaseSessionStorage(BaseSessionStorage):
-  """SessionStorage using database"""
-  def __init__(self, pool, **kwargs):
-    super(DatabaseSessionStorage, self).__init__(**kwargs)
-    self.pool = pool
-    self.connection = self.pool.get(options.session_dsn)
-    self._create_tables()
-
-  def _create_tables(self):
-    script = pkgutil.get_data(__name__, 'session/%s.sql' % self.connection.driver)
-    cursor = self.connection.cursor()
-    cursor.executescript(script)
-
-  def _read(self, session_id, lifetime):
-    cursor = self.connection.execute("SELECT * FROM session WHERE session_id=%s AND expires > NOW() + '%s'", (session_id, lifetime))
-    try:
-      data = pickle.loads(cursor.fetchone().content)
-      if type(data) == type({}):
-        return data
-      else:
-        return {}
-    except AttributeError:
-      return {}
-    finally:
-      self.connection.commit()
-
-  def get(self, session_id=None, hmac_digest=None, lifetime=options.session_lifetime):
-    (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
-
-    session = _Session(session_id, hmac_digest, lifetime, self)
-    if session_should_exist:
-      data = self._read(session_id, lifetime)
-      for i, j in data.iteritems():
-        session[i] = j
-    return session
-
-  def set(self, session):
-    pickled = pickle.dumps(dict(session.items()))
-    try:
-      try:
-        self.connection.execute('''INSERT INTO session
-         VALUES(%(session_id)s, NOW() + '%(lifetime)s',%(content)s)''', {'session_id': session.session_id,
-                                                                   'lifetime': session.lifetime,
-                                                                   'content': pickled}).close()
-      except database.IntegrityError:
-        self.connection.execute('''UPDATE session SET content = %(content)s,
-         expires = NOW() + '%(lifetime)s'
-         WHERE session_id = %(session_id)s''', {'session_id': session.session_id,
-                                               'lifetime': session.lifetime,
-                                               'content': pickled}).close()
-    except database.Error, e:
-      print e
-      self.connection.rollback()
-    else:
-      self.connection.commit()
-
-  def delete(self, session):
-    session.close()
-    try:
-      self.connection.execute('DELETE FROM session WHERE session_id = %s', (session.session_id,)).close()
-    except database.Error, e:
-      print e
-      self.connection.rollback()
-    else:
-      self.connection.commit()
-
-  def expired(self):
-    """Cleans up expired sessions"""
-    try:
-      cursor = self.connection.execute('DELETE FROM session WHERE expires < NOW()')
-      return cursor.rowcount
-    except database.Error, e:
-      self.connection.rollback()
-    else:
-      self.connection.commit()
-    finally:
-      cursor.close()
-
+  
   def close(self):
-    self.connection.commit()
-    self.pool.put(self.connection)
-    self.connection = None
-    self.pool = None
+    self.closed = True
 
+try:
+  import database
+  define('session_dsn', default=None, metavar='driver://[user[:password]@]hostname[:port]/dbname',
+         help='DSN for database session storage')
+
+  class DatabaseSessionStorage(BaseSessionStorage):
+    """SessionStorage using database"""
+    def __init__(self, pool, **kwargs):
+      super(DatabaseSessionStorage, self).__init__(**kwargs)
+      self.pool = pool
+      self.connection = self.pool.get(options.session_dsn)
+      self._create_tables()
+
+    def _create_tables(self):
+      print repr(self.connection)
+      script = pkgutil.get_data(__name__, 'session/%s.sql' % self.connection.driver)
+      cursor = self.connection.cursor()
+      cursor.executescript(script)
+    
+    def _read(self, session_id, lifetime):
+      cursor = self.connection.execute("SELECT * FROM session WHERE session_id=%s AND expires > NOW() + '%s'", (session_id, lifetime))
+      try:
+        data = pickle.loads(cursor.fetchone().content)
+        if type(data) == type({}):
+          return data
+        else:
+          return {}
+      except AttributeError:
+        return {}
+      finally:
+        self.connection.commit()
+
+    def get(self, session_id=None, hmac_digest=None, lifetime=options.session_lifetime):
+      (session_should_exist, expected_hmac_digest, session_id, hmac_digest) = self._generate_session(session_id, hmac_digest)
+
+      session = _Session(session_id, hmac_digest, lifetime, self)
+      if session_should_exist:
+        data = self._read(session_id, lifetime)
+        for i, j in data.iteritems():
+          session[i] = j
+      return session
+
+    def set(self, session):
+      pickled = pickle.dumps(dict(session.items()))
+      try:
+        try:
+          self.connection.execute('''INSERT INTO session
+           VALUES(%(session_id)s, NOW() + '%(lifetime)s',%(content)s)''', {'session_id': session.session_id,
+                                                                           'lifetime': session.lifetime,
+                                                                           'content': pickled}).close()
+        except database.IntegrityError:
+          self.connection.execute('''UPDATE session SET content = %(content)s,
+           expires = NOW() + '%(lifetime)s'
+           WHERE session_id = %(session_id)s''', {'session_id': session.session_id,
+                                                  'lifetime': session.lifetime,
+                                                  'content': pickled}).close()
+      except database.Error, e:
+        print e
+        self.connection.rollback()
+      else:
+        self.connection.commit()
+
+    def delete(self, session):
+      session.close()
+      try:
+        self.connection.execute('DELETE FROM session WHERE session_id = %s', (session.session_id,)).close()
+      except database.Error, e:
+        print e
+        self.connection.rollback()
+      else:
+        self.connection.commit()
+
+    def expired(self):
+      """Cleans up expired sessions"""
+      try:
+        cursor = self.connection.execute('DELETE FROM session WHERE expires < NOW()')
+        return cursor.rowcount
+      except database.Error, e:
+        self.connection.rollback()
+      else:
+        self.connection.commit()
+      finally:
+        cursor.close()
+
+    def close(self):
+      self.connection.commit()
+      self.pool.put(self.connection)
+      self.connection = None
+      self.pool = None
+
+      
+except ImportError:
+  pass
 
 #TODO: zaimplementowac memcache
 try:
@@ -356,6 +371,7 @@ class SessionManager(object):
     self.sessionstorage = sessionstorage(**kwargs)
     self._cleaner = PeriodicCallback(self._cleanup, options.session_lifetime * 500)
     self._cleaner.start()
+    self.closed = False
 
   def _cleanup(self):
     self._expired()
@@ -381,6 +397,15 @@ class SessionManager(object):
     requestHandler.clear_cookie('hmac_digest')
     return self.sessionstorage.delete(session)
     del session
+  
+  def close(self):
+    self.sessionstorage.close()
+    self._cleaner.stop()
+    self.closed = True
+  
+  def __del__(self):
+    if not self.closed:
+      self.close()
 
 
 class Session(_Session):
