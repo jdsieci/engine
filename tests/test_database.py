@@ -1,6 +1,6 @@
 
-import base
 import sys
+import base
 from engine import database
 import sqlite3
 import tempfile
@@ -19,8 +19,8 @@ class testConnection(base.TestCase):
   
   def setUp(self):
     self.connection = database.connect('sqlite://%s/%s' % (self.tmpdir, 'test.db'))
-    self.sqlitecon = sqlite3.connect('%s/%s' % (self.tmpdir, 'test.db')) 
-  
+    self.sqlitecon = sqlite3.connect('%s/%s' % (self.tmpdir, 'test.db'))
+    
   def test_connect(self):
     connection = database.connect('sqlite://:memory:')
     self.assertIsInstance(connection, database.Connection)
@@ -70,7 +70,6 @@ class testConnectionPool(base.TestCase):
     self.assertEqual(self.pool.available, 0)
     for c in connection:
       self.pool.put(c)
-      print c 
     self.assertEqual(self.pool.count, self.maxcon)
     self.assertEqual(self.pool.in_use, 0)
     self.assertEqual(self.pool.available, self.maxcon)
@@ -92,10 +91,14 @@ class testPool(base.TestCase):
     
   def setUp(self):
     self.pool = database.Pool.instance(self.maxdsn)
+    
+  def tearDown(self):
+    self.pool.reset()
   
   def test_single_instance(self):
     pool = database.Pool.instance()
     self.assertEqual(self.pool, pool)
+    connection = self.pool.get('sqlite://:memory:')
     self.assertNotEqual(pool.dsn_count, 0)
   
   def test_get(self):
@@ -106,7 +109,6 @@ class testPool(base.TestCase):
     pass
   
   def test_maxdsn(self):
-    self.assertNotEqual(self.pool.gets, 0)
     for d in self.dsn:
       self.pool.get(d)
     with self.assertRaisesRegexp(database.PoolError,'Pool of pools exeeded'):

@@ -1,1 +1,3 @@
-recursive-include *.py README
+recursive-include engine *.py
+recursive-include engine *.sql
+include README

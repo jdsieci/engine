@@ -65,11 +65,13 @@ class TestDatabaseStorage(base.TestCase):
   
   def setUp(self):
     self.storage = DatabaseSessionStorage(self.pool,secret='')
-    print self.storage.connection
+    
+  def tearDown(self):
+    del self.storage
 
   def test_get_empty(self):
     session = self.storage.get()
-    assert hasattr(session,'session_id') and hasattr(session,'hmac_digest')
+    self.assertTrue(hasattr(session,'session_id') and hasattr(session,'hmac_digest'))
 
   def test_set_session(self):
     session = self.storage.get()
@@ -77,7 +79,7 @@ class TestDatabaseStorage(base.TestCase):
     connection = self.pool.get(options.session_dsn)
     row = connection.execute('SELECT * from session WHERE session_id = %s',(session.session_id,)).fetchone()
     connection.commit()
-    self.assertEqual(row.session_id, session.session_id)
+    self.assertEqual(str(row.session_id), str(session.session_id))
 
   def test_get_full(self):
     session = self.storage.get()

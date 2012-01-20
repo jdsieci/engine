@@ -170,10 +170,10 @@ class BaseSessionStorage(object):
     return (session_should_exist, expected_hmac_digest, session_id, hmac_digest)
 
   def _get_hmac_digest(self, session_id):
-    return hmac.new(session_id, self.secret, hashlib.sha1).hexdigest()
+    return hmac.new(session_id.encode(), self.secret.encode(), hashlib.sha1).hexdigest()
 
   def _generate_uid(self):
-    base = hashlib.md5(self.secret + str(uuid.uuid4()))
+    base = hashlib.md5(self.secret.encode() + str(uuid.uuid4()).encode())
     return base.hexdigest()
   
   def close(self):
@@ -198,7 +198,9 @@ class DirectorySessionStorage(BaseSessionStorage):
   def _read(self, session_id):
     session_path = self._get_session_path(session_id)
     try:
-      data = pickle.load(open(session_path))
+      session_file = open(session_path, 'rb')
+      data = pickle.load(session_file)
+      session_file.close()
       if type(data) == type({}):
         return data
       else:
@@ -256,7 +258,6 @@ try:
       self._create_tables()
 
     def _create_tables(self):
-      print repr(self.connection)
       script = pkgutil.get_data(__name__, 'session/%s.sql' % self.connection.driver)
       cursor = self.connection.cursor()
       cursor.executescript(script)
@@ -331,6 +332,11 @@ try:
       self.pool.put(self.connection)
       self.connection = None
       self.pool = None
+      self.closed = True
+      
+    def __del__(self):
+      if not self.closed:
+        self.close()
 
       
 except ImportError:

@@ -17,10 +17,11 @@
 
 import os
 import sys
-try:
-  from setuptools import setup
-except ImportError:
-  from distutils.core import setup
+
+#import distribute_setup
+#distribute_setup.use_setuptools()
+
+from setuptools import setup
 
 kwargs = {}
 
@@ -30,20 +31,27 @@ def read(fname):
 major, minor = sys.version_info[:2]
 if major >= 3:
   kwargs["use_2to3"] = True
+else:
+  import distribute_setup
+  distribute_setup.use_setuptools()
+  
 
+from setuptools import setup
 
 setup(name="engine",
-      version = "0.1.0",
+      version = "0.1.0.dev",
       author = "JDSieci",
       author_email = "biuro@jdsieci.pl",
-      description = "Enchanced ",
+      url = 'http://www.jdsieci.pl',
+      description = "Enchanced Tornado",
       long_description = read('README'),
       license = "http://www.apache.org/licenses/LICENSE-2.0",
-      package_dir = {'engine':'engine'},
-      package_data = {'engine':['session/*.sql']},
+      #namespace_packages = ['engine'], 
       packages = ['engine'],
-      requires = ['tornado (>=2.1.1)', 'daemon', 'setproctitle'],
+      package_dir = {'engine': 'engine'},
+      package_data = {'engine': ['session/*.sql']},
       install_requires = ['tornado>=2.1.1', 'daemon', 'setproctitle'],
-      scripts = [],
+      extras_requires = {'database': ['psycopg2', 'MySQLdb']},
+      test_suite = 'tests',
       **kwargs
      )

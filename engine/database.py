@@ -12,7 +12,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 '''
-DB-API 2.0 Compilant database wrapper, for MySQL (MySQLdb),
+DB-API 2.0 Compilant database wrapper, for MySQL (MySQLdb) python2 only,
 PostgreSQL (psycopg2) and SQLite (sqlite3).
 Implemented single connection Pool for application process.
 
@@ -38,7 +38,6 @@ import logging
 import time
 import math
 import itertools
-import exceptions
 
 from tornado.ioloop import PeriodicCallback
 
@@ -99,7 +98,7 @@ def connect(dsn, **kwargs):
 
 class Connection(object):
 
-  def __init__(self, dsn, **kwargs):
+  def __init__(self, dsn, pool=None, **kwargs):
     try:
       (exception, driver, user, password, host, port, unix_socket, dbname, path) = _DSNRE.match(dsn).groups()
     except AttributeError:
@@ -108,6 +107,7 @@ class Connection(object):
     self._dsn = dsn
     self._db_args = None
     self._db = None
+    self._pool = None
     self.password = password
     if not exception:
       self.host = host
@@ -280,6 +280,9 @@ class Connection(object):
         self._db.rollback()
         self._db.close()
         self._db = None
+      if self._pool is not None:
+        self._pool.put(self)
+        self._pool = None
     except AttributeError:
       pass
 
@@ -451,6 +454,7 @@ class ConnectionPool(object):
     while self._connections:
       con = self._connections.pop()
       con.close()
+      del con
 
   def get(self):
     if self.closed:
@@ -466,7 +470,7 @@ class ConnectionPool(object):
 
   def put(self, connection, close=False):
     if self.closed:
-      raise PoolError("Nobody's home, come later")
+      raise PoolError("Pool closed, come later")
     try:
       self._in_use.remove(connection)
     except ValueError:
@@ -687,12 +691,17 @@ def _reraise(exc):
   elif exc_name == 'NotSupportedError':
     raise NotSupportedError(exc)
 
+import sys
+major, minor = sys.version_info[:2]
+if major < 3:
+  from exceptions import *
 
-class Error(exceptions.StandardError):
+
+class Error(StandardError):
   pass
 
 
-class Warning(exceptions.StandardError):
+class Warning(StandardError):
   pass
 
 

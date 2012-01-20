@@ -68,5 +68,9 @@ class DatabaseApplication(SimpleApplication):
     super(BaseApplication, self).__init__(handlers, **settings)
 
   def db(self, dsn):
-    """returns database pool instance"""
-    return self.pool.getconn(dsn)
+    """returns database connection from pool"""
+    return self.pool.get(dsn)
+  
+  def release(self, connection):
+    """Zwraca polaczenie do puli"""
+    return self.pool.put(connection)
