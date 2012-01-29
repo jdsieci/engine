@@ -54,8 +54,8 @@ try:
   import MySQLdb
   _ALLOWED_DRIVERS['mysql'] = MySQLdb
   import MySQLdb.cursors
-  import MySQLdb.constants
-  import MySQLdb.converters
+  #import MySQLdb.constants
+  #import MySQLdb.converters
   _BASECURSORS['mysql'] = MySQLdb.cursors.Cursor
 except ImportError:
   pass
@@ -694,7 +694,7 @@ def _reraise(exc):
 import sys
 major, minor = sys.version_info[:2]
 if major < 3:
-  from exceptions import *
+  from exceptions import StandardError
 
 
 class Error(StandardError):

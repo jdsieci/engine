@@ -27,7 +27,7 @@ import tornado.web
 from tornado.options import define, options
 import session
 import database
-import os
+
 #build-in options
 define('sessionsecret', default=None, help='Session secret password')
 define('cookiesecret', default='u_must_change_it')
