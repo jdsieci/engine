@@ -1,0 +1,15 @@
+WERSJA = 1
+MIME TYPE: text/json
+NAGLOWKI: headers
+  POLA: msgid, type, version
+    type: 'normal' | 'system' | 'control'
+    msgid: UUID (ro)
+    version: wersja struktury wiadmosci
+
+BODY: body (dozwolone dla typu normal i system)
+  POLA: type, payload | parts
+    type: mimetype | multipart (opcjonalne w wersji 1)
+    payload: message payload (w wersji 1 string jsona
+    parts: (wystepuje jezeli type = multipart) (nie wystepuje w wesji 1)
+      type: mimetype
+      payload: part payload
